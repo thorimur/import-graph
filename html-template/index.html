@@ -123,12 +123,6 @@
       top: 1.5em;
       padding: .5em;
     }
-    .layout-select {
-      position: absolute;
-      right: 0;
-      top: 3em;
-      padding: .5em;
-    }
   </style>
 </head>
 <body>
@@ -140,13 +134,6 @@
     Node sizes indicate the number of declarations in the file.</p>
     <label class="pause-checkbox"><input type="checkbox" id="pause" checked/> Pause graph layout</label>
     <label class="reverse-checkbox"><input type="checkbox" id="reverse"/>Highlight imports instead</label>
-    <label class="layout-select">Layout:
-      <select id="layout">
-        <option value="forceatlas2">Force-directed</option>
-        <option value="layered-v">Layered (vertical)</option>
-        <option value="layered-h">Layered (horizontal)</option>
-      </select>
-    </label>
   </div>
   <div class="key-wrapper">
     <ul id="key"></ul>
@@ -212,7 +199,6 @@ let key = document.getElementById('key');
 let pause = document.getElementById('pause');
 // reverse: highlight upstream/imports instead of downstream/descendants
 let reverse = document.getElementById('reverse');
-let layoutSelect = document.getElementById('layout');
 
 var render_gexf = (gexf) => {
   let graph = graphologyLibrary.gexf.parse(graphology.Graph, gexf);
@@ -393,66 +379,6 @@ var render_gexf = (gexf) => {
     } else {
       worker.start();
     }
-  });
-
-  // Layout switching. Force-directed is the default and uses the worker above;
-  // layered layouts are computed once via dagre, with the FA2 worker stopped.
-  var applyLayered = function (rankdir) {
-    var dg = new dagre.graphlib.Graph();
-    dg.setGraph({ rankdir: rankdir, ranksep: 50, nodesep: 30, marginx: 20, marginy: 20 });
-    dg.setDefaultEdgeLabel(function () { return {}; });
-    for (let node of graph.nodes()) {
-      var sz = graph.getNodeAttribute(node, 'size') || 5;
-      // dagre needs node dimensions; use sigma's size for reasonable spacing.
-      dg.setNode(node, { width: sz * 4, height: sz * 4 });
-    }
-    for (let edge of graph.edges()) {
-      dg.setEdge(graph.source(edge), graph.target(edge));
-    }
-    dagre.layout(dg);
-    // Center and scale into roughly the same coordinate range as FA2 so sigma's camera
-    // doesn't need adjustment.
-    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    dg.nodes().forEach(function (n) {
-      var p = dg.node(n);
-      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-    });
-    var w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
-    var scale = 100 / Math.max(w, h);
-    for (let node of graph.nodes()) {
-      var p = dg.node(node);
-      graph.setNodeAttribute(node, 'x',  (p.x - (minX + maxX) / 2) * scale);
-      // Flip Y so dagre's "top" appears at the top of the sigma viewport.
-      graph.setNodeAttribute(node, 'y', -(p.y - (minY + maxY) / 2) * scale);
-    }
-  };
-
-  layoutSelect.addEventListener('change', (event) => {
-    worker.stop();
-    var name = event.currentTarget.value;
-    if (name === 'forceatlas2') {
-      // Re-seed and run a few synchronous iterations, then resume the worker
-      // unless the user has paused.
-      let sorted = Array.from(graph.nodes()).sort();
-      for (let [i, node] of sorted.entries()) {
-        let nd = graph.getNodeAttributes(node);
-        let theta = i / sorted.length;
-        nd.x = 0.1 * Math.cos(theta * 2 * Math.PI);
-        nd.y = 0.1 * Math.sin(theta * 2 * Math.PI);
-      }
-      graphologyLibrary.layoutForceAtlas2.assign(graph, {
-        iterations: 10, settings: force_atlas_settings,
-      });
-      if (!pause.checked) worker.start();
-    } else if (name === 'layered-v') {
-      applyLayered('TB');
-      pause.checked = true;
-    } else if (name === 'layered-h') {
-      applyLayered('LR');
-      pause.checked = true;
-    }
-    renderer.refresh();
   });
 
   reverse.addEventListener('change', (event) => {
