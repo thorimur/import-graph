@@ -27,7 +27,7 @@ private def isBlackListed (env : Environment) (declName : Name) : Bool :=
   || isMatcherCore env declName
 
 /-- Get number of non-blacklisted declarations per file. -/
-private def getNumberOfDeclsPerFile (env: Environment) : NameMap Nat :=
+public def getNumberOfDeclsPerFile (env: Environment) : NameMap Nat :=
   env.const2ModIdx.fold (fun acc n (idx : ModuleIdx) =>
     let mod := env.allImportedModuleNames[idx]!
     if isBlackListed env n then acc else acc.insert mod ((acc.getD mod 0) + 1)
@@ -49,8 +49,7 @@ Metadata can be stored in forms of attributes, currently we record the following
 * `layer` (Nat): topological layer (longest dependency chain ending at this
   node), used by layered layouts in the visualization.
 -/
-public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name) (env : Environment) : String :=
-  let sizes : NameMap Nat := getNumberOfDeclsPerFile env
+public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name) (sizes : NameMap Nat) : String :=
   let layers : NameMap Nat := graph.topologicalLayers
   let nodes : String := graph.foldl
     (fun acc n _ => acc ++ nodeTemplate n module (sizes.getD n 0) (layers.getD n 0)) ""
