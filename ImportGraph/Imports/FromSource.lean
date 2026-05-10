@@ -89,3 +89,28 @@ public def findTransitiveImportsFromSource
             queue := queue.push imp
 
   return visited
+
+/--
+Build an import graph by parsing source files, starting from `roots` and walking
+direct imports recursively. Returns a `NameMap` from each visited module to its
+array of direct imports.
+
+Like `findTransitiveImportsFromSource`, this only sees syntactic imports.
+Modules whose source file does not exist (e.g., `Lean.*` from outside the CWD)
+are recorded with an empty import list rather than recursed into.
+
+Used to support a no-`olean` mode of `lake exe graph`.
+-/
+public partial def buildGraphFromSource (roots : Array Name) : IO (NameMap (Array Name)) := do
+  let mut graph : NameMap (Array Name) := {}
+  let mut queue := roots.toList
+  while !queue.isEmpty do
+    let module := queue.head!
+    queue := queue.tail!
+    if graph.contains module then continue
+    let path := System.mkFilePath (module.components.map (·.toString)) |>.addExtension "lean"
+    let imports ← if ← path.pathExists then findImportsFromSource path else pure #[]
+    graph := graph.insert module imports
+    for imp in imports do
+      if !graph.contains imp then queue := imp :: queue
+  return graph

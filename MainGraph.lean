@@ -4,6 +4,7 @@ public import Cli.Basic
 import ImportGraph.Export.DotFile
 import ImportGraph.Export.Gexf
 import ImportGraph.Graph.Filter
+import ImportGraph.Imports.FromSource
 import ImportGraph.Imports.ImportGraph
 import ImportGraph.Imports.RequiredModules
 import ImportGraph.Lean.Name
@@ -44,22 +45,17 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
   | none => none
   initSearchPath (← findSysroot)
 
-  unsafe Lean.enableInitializersExecution
-  let outFiles ← try unsafe withImportModules (to.map ({module := ·})) {} (trustLevel := 1024) fun env => do
-    let toModule := ImportGraph.getModule to[0]!
-    let mut graph := env.importGraph
-    let unused ←
-      match args.flag? "to" with
-      | some _ =>
-        let init := NameSet.ofArray to
-        let ctx := { options := {}, fileName := "<input>", fileMap := default }
-        let state := { env }
-        let used ← Prod.fst <$> (CoreM.toIO (env.transitivelyRequiredModules' to.toList) ctx state)
-        let used := used.foldl (init := init) (fun s _ t => s ∪ t)
-        pure <| graph.foldl (fun acc n _ => if used.contains n then acc else acc.insert n) NameSet.empty
-      | none => pure NameSet.empty
-    let modulesWithSorry := if args.hasFlag "mark-sorry" then ImportGraph.allModulesWithSorry env else ∅
+  let toModule := ImportGraph.getModule to[0]!
 
+  -- All output generation downstream of building the graph: pure data
+  -- transformations + format emission. Lifted into a local helper so both
+  -- the env-based and `--skip-build` paths can share it, *and* so the env
+  -- path consumes env-derived values entirely inside the `withImportModules`
+  -- callback (returning only the final string outputs).
+  let mkOutputs (graph₀ : NameMap (Array Name)) (unused : NameSet)
+      (modulesWithSorry : NameSet) (sizes : NameMap Nat) :
+      Std.HashMap String String := Id.run do
+    let mut graph := graph₀
     if let Option.some f := from? then
       graph := graph.downstreamOf (NameSet.ofArray f)
     let includeLean := args.hasFlag "include-lean"
@@ -88,16 +84,12 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
 
     graph := graph.filterMap (fun n i =>
       if filter n then
-        -- include node regularly
-        (i.filter (fun m => filterDirect m || filter m))
+        i.filter (fun m => filterDirect m || filter m)
       else if filterDirect n then
-        -- include node as direct dependency; drop any further deps.
         some #[]
       else
-        -- not included
         none)
     if args.hasFlag "exclude-meta" then
-      -- Mathlib-specific exclusion of tactics
       let filterMathlibMeta : Name → Bool := fun n => (
         isPrefixOf `Mathlib.Tactic n ∨
         isPrefixOf `Mathlib.Lean n ∨
@@ -109,7 +101,6 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
 
     let markedPackage : Option Name := if args.hasFlag "mark-package" then toModule else none
 
-    -- Create all output files that are requested
     let mut outFiles : Std.HashMap String String := {}
     if extensions.contains "dot" then
       let dotFile := asDotGraph graph (unused := unused) (markedPackage := markedPackage)
@@ -122,15 +113,32 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
       let graph₂ := match args.flag? "to" with
         | none => graph.filter (fun n _ => ! if to.contains `Mathlib then #[`Mathlib, `Mathlib.Tactic].contains n else to.contains n)
         | some _ => graph
-      let gexfFile := Graph.toGexf graph₂ toModule (getNumberOfDeclsPerFile env)
-      outFiles := outFiles.insert "gexf" gexfFile
+      outFiles := outFiles.insert "gexf" (Graph.toGexf graph₂ toModule sizes)
     return outFiles
 
-  catch err =>
-    -- TODO: try to build `to` first, so this doesn't happen
-    throw <| IO.userError <| s!"{err}\nIf the error above says `object file ... does not exist`, " ++
-      s!"try if `lake build {" ".intercalate (to.toList.map Name.toString)}` fixes the issue"
-    throw err
+  let outFiles ← if args.hasFlag "skip-build" then do
+    let g ← buildGraphFromSource to
+    pure (mkOutputs g ∅ ∅ ∅)
+  else do
+    unsafe Lean.enableInitializersExecution
+    try unsafe withImportModules (to.map ({module := ·})) {} (trustLevel := 1024) fun env => do
+      let g := env.importGraph
+      let u ← match args.flag? "to" with
+        | some _ =>
+          let init := NameSet.ofArray to
+          let ctx := { options := {}, fileName := "<input>", fileMap := default }
+          let state := { env }
+          let used ← Prod.fst <$> (CoreM.toIO (env.transitivelyRequiredModules' to.toList) ctx state)
+          let used := used.foldl (init := init) (fun s _ t => s ∪ t)
+          pure <| g.foldl (fun acc n _ => if used.contains n then acc else acc.insert n) NameSet.empty
+        | none => pure NameSet.empty
+      let s := if args.hasFlag "mark-sorry" then ImportGraph.allModulesWithSorry env else ∅
+      pure (mkOutputs g u s (getNumberOfDeclsPerFile env))
+    catch err =>
+      -- TODO: try to build `to` first, so this doesn't happen
+      throw <| IO.userError <| s!"{err}\nIf the error above says `object file ... does not exist`, " ++
+        s!"try if `lake build {" ".intercalate (to.toList.map Name.toString)}` fixes the issue, " ++
+        s!"or pass `--skip-build` to build the import graph from source files instead."
 
   match args.variableArgsAs! String with
   | #[] => writeFile "import_graph.dot" (outFiles["dot"]!)
@@ -189,6 +197,7 @@ def graph : Cmd := `[Cli|
     "include-lean";            "Include used files from Lean itself (implies `--include-deps` and `--include-std`)"
     "mark-package";            "Visually highlight the package containing the first `--to` target (used in combination with some `--include-XXX`)."
     "mark-sorry";              "Visually highlight modules containing sorries."
+    "skip-build";              "Build the graph by parsing imports from source files; skips loading `.olean` files. Decl counts will be 0 and `--mark-sorry` will be ignored."
 
   ARGS:
     ...outputs : String;  "Filename(s) for the output. \
