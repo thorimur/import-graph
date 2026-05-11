@@ -114,8 +114,11 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
         | none => graph.filter (fun n _ => ! if to.contains `Mathlib then #[`Mathlib, `Mathlib.Tactic].contains n else to.contains n)
         | some _ => graph
       let barycenterIters := if args.hasFlag "name-sort-layers" then 0 else 8
+      let folderColumns := args.hasFlag "folder-columns"
       outFiles := outFiles.insert "gexf"
-        (Graph.toGexf graph₂ toModule sizes (barycenterIters := barycenterIters))
+        (Graph.toGexf graph₂ toModule sizes
+          (barycenterIters := barycenterIters)
+          (folderColumns := folderColumns))
     return outFiles
 
   let outFiles ← if args.hasFlag "skip-build" then do
@@ -208,6 +211,7 @@ def graph : Cmd := `[Cli|
     "mark-sorry";              "Visually highlight modules containing sorries."
     "skip-build";              "Build the graph by parsing imports from source files; skips loading `.olean` files. Decl counts will be 0 and `--mark-sorry` will be ignored."
     "name-sort-layers";        "In layered layouts, sort nodes within each layer alphabetically instead of by the default barycenter heuristic."
+    "folder-columns";          "In layered layouts, give each folder (first sub-namespace under `--to`) its own variable-width column with barycenter applied per-cell."
 
   ARGS:
     ...outputs : String;  "Filename(s) for the output. \

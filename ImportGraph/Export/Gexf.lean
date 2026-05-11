@@ -53,10 +53,14 @@ Metadata can be stored in forms of attributes, currently we record the following
   layered DAG, used by layered layouts in the visualization.
 -/
 public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
-    (sizes : NameMap Nat) (barycenterIters : Nat := 8) : String :=
+    (sizes : NameMap Nat) (barycenterIters : Nat := 8)
+    (folderColumns : Bool := false) : String :=
   let layers : NameMap Nat := graph.topologicalLayers
-  let layerXs₀ : NameMap Nat := graph.withinLayerIndices layers (iters := barycenterIters)
-  let layerXs : NameMap Nat := graph.withFolderColumns module layers layerXs₀
+  let layerXs : NameMap Nat :=
+    if folderColumns then
+      graph.withFolderColumns module layers (iters := barycenterIters)
+    else
+      graph.withinLayerIndices layers (iters := barycenterIters)
   let nodes : String := graph.foldl
     (fun acc n _ => acc ++ nodeTemplate n module
       (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)) ""
