@@ -104,13 +104,13 @@ Used to support a no-`olean` mode of `lake exe graph`.
 public partial def buildGraphFromSource (roots : Array Name) : IO (NameMap (Array Name)) := do
   let mut graph : NameMap (Array Name) := {}
   let mut queue := roots.toList
-  while !queue.isEmpty do
-    let module := queue.head!
-    queue := queue.tail!
-    if graph.contains module then continue
-    let path := System.mkFilePath (module.components.map (·.toString)) |>.addExtension "lean"
+  while h : !queue.isEmpty do
+    let mod := queue.head (by grind)
+    queue := queue.tail
+    if graph.contains mod then continue
+    let path := System.mkFilePath (mod.components.map (·.toString)) |>.addExtension "lean"
     let imports ← if ← path.pathExists then findImportsFromSource path else pure #[]
-    graph := graph.insert module imports
+    graph := graph.insert mod imports
     for imp in imports do
       if !graph.contains imp then queue := imp :: queue
   return graph
