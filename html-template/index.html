@@ -136,7 +136,7 @@
     <!-- Note `<h1>Import Graph</h1>` is searched for by `lake exe graph`, keep it updated there. -->
     <h1>Import Graph</h1>
     <p>Built with <a href="https://www.sigmajs.org/">Sigma.js</a>.
-    Node sizes indicate the number of declarations in the file.</p>
+    <span id="decl-count-note">Node sizes indicate the number of declarations in the file.</span></p>
     <label class="pause-checkbox"><input type="checkbox" id="pause" checked/> Pause graph layout</label>
     <label class="reverse-checkbox"><input type="checkbox" id="reverse"/>Highlight imports instead</label>
     <label class="layout-select">Layout:
@@ -308,6 +308,12 @@ var render_gexf = (gexf) => {
     if (node_data.decl_count > max_decls) {
       max_decls = node_data.decl_count
     }
+  }
+  // If no declaration counts are available (e.g. graph was produced with
+  // `--skip-build`), node sizes are uniform; hide the explanatory note.
+  if (max_decls === 0) {
+    let note = document.getElementById('decl-count-note');
+    if (note) note.style.display = 'none';
   }
 
   // color the nodes
