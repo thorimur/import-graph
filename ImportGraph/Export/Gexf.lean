@@ -9,6 +9,7 @@ public import Lean.Data.NameMap.Basic
 public import Lean.Environment
 import Lean.Meta.Match.MatcherInfo
 import ImportGraph.Graph.Layers
+import ImportGraph.Graph.LayeredLayout
 
 open Lean
 
@@ -34,7 +35,7 @@ public def getNumberOfDeclsPerFile (env: Environment) : NameMap Nat :=
     ) {}
 
 /-- Gexf template for a node in th graph. -/
-private def Gexf.nodeTemplate (n module : Name) (size layer : Nat) := s!"<node id=\"{n}\" label=\"{n}\"><attvalues><attvalue for=\"0\" value=\"{size}\" /><attvalue for=\"1\" value=\"{module.isPrefixOf n}\" /><attvalue for=\"2\" value=\"{layer}\" /></attvalues></node>\n          "
+private def Gexf.nodeTemplate (n module : Name) (size layer layerX : Nat) := s!"<node id=\"{n}\" label=\"{n}\"><attvalues><attvalue for=\"0\" value=\"{size}\" /><attvalue for=\"1\" value=\"{module.isPrefixOf n}\" /><attvalue for=\"2\" value=\"{layer}\" /><attvalue for=\"3\" value=\"{layerX}\" /></attvalues></node>\n          "
 
 /-- Gexf template for an edge in the graph -/
 private def Gexf.edgeTemplate (source target : Name) := s!"<edge source=\"{source}\" target=\"{target}\" id=\"{source}--{target}\" />\n          "
@@ -48,11 +49,15 @@ Metadata can be stored in forms of attributes, currently we record the following
   (used to strip the first part of the name when displaying).
 * `layer` (Nat): topological layer (longest dependency chain ending at this
   node), used by layered layouts in the visualization.
+* `layerX` (Nat): within-layer index from a barycenter sweep over the
+  layered DAG, used by layered layouts in the visualization.
 -/
 public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name) (sizes : NameMap Nat) : String :=
   let layers : NameMap Nat := graph.topologicalLayers
+  let layerXs : NameMap Nat := graph.withinLayerIndices layers
   let nodes : String := graph.foldl
-    (fun acc n _ => acc ++ nodeTemplate n module (sizes.getD n 0) (layers.getD n 0)) ""
+    (fun acc n _ => acc ++ nodeTemplate n module
+      (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)) ""
   let edges : String := graph.foldl (fun acc n i => acc ++ (i.foldl (fun b j => b ++ edgeTemplate j n) "")) ""
   s!"<?xml version='1.0' encoding='utf-8'?>
     <gexf xmlns=\"http://www.gexf.net/1.2draft\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.gexf.net/1.2draft http://www.gexf.net/1.2draft/gexf.xsd\" version=\"1.2\">
@@ -64,6 +69,7 @@ public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name) (sizes : 
           <attribute id=\"0\" title=\"decl_count\" type=\"long\" />
           <attribute id=\"1\" title=\"in_module\" type=\"boolean\" />
           <attribute id=\"2\" title=\"layer\" type=\"long\" />
+          <attribute id=\"3\" title=\"layerX\" type=\"long\" />
         </attributes>
         <nodes>
           {nodes.trimAscii}
