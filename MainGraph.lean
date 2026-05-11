@@ -117,9 +117,15 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
     return outFiles
 
   let outFiles ← if args.hasFlag "skip-build" then do
+    if args.hasFlag "mark-sorry" then
+      IO.eprintln "warning: `--mark-sorry` is ignored under `--skip-build` \
+        (detecting sorries requires elaborated module declarations)."
+    if (args.flag? "to").isSome then
+      IO.eprintln "warning: `--skip-build` with `--to`: 'unused import' highlighting in \
+        dot output is not computed (it requires elaborated module declarations)."
     let g ← buildGraphFromSource to
     pure (mkOutputs g ∅ ∅ ∅)
-  else do
+  else
     unsafe Lean.enableInitializersExecution
     try unsafe withImportModules (to.map ({module := ·})) {} (trustLevel := 1024) fun env => do
       let g := env.importGraph
@@ -136,9 +142,11 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
       pure (mkOutputs g u s (getNumberOfDeclsPerFile env))
     catch err =>
       -- TODO: try to build `to` first, so this doesn't happen
-      throw <| IO.userError <| s!"{err}\nIf the error above says `object file ... does not exist`, " ++
-        s!"try if `lake build {" ".intercalate (to.toList.map Name.toString)}` fixes the issue, " ++
-        s!"or pass `--skip-build` to build the import graph from source files instead."
+      let modules := " ".intercalate (to.toList.map Name.toString)
+      throw <| IO.userError s!"\
+        Failed to load modules ({modules}): {err}\n\
+        If they have not been built yet, try `lake build`, or pass \
+        `--skip-build` to build the import graph from source files instead."
 
   match args.variableArgsAs! String with
   | #[] => writeFile "import_graph.dot" (outFiles["dot"]!)
