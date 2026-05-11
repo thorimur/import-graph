@@ -166,8 +166,7 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
         for dep in (#[
             "vendor" / "sigma.min.js",
             "vendor" / "graphology.min.js",
-            "vendor" / "graphology-library.min.js",
-            "vendor" / "dagre.min.js" ] : Array FilePath) do
+            "vendor" / "graphology-library.min.js" ] : Array FilePath) do
           let depContent ← IO.FS.readFile <| ← IO.FS.realPath (exeDir / "html-template" / dep)
           html := html.replace s!"<script src=\"{dep}\"></script>" s!"<script>{depContent}</script>"
         -- inline the graph data
