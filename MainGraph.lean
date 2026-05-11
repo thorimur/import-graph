@@ -113,7 +113,9 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
       let graph₂ := match args.flag? "to" with
         | none => graph.filter (fun n _ => ! if to.contains `Mathlib then #[`Mathlib, `Mathlib.Tactic].contains n else to.contains n)
         | some _ => graph
-      outFiles := outFiles.insert "gexf" (Graph.toGexf graph₂ toModule sizes)
+      let barycenterIters := if args.hasFlag "name-sort-layers" then 0 else 8
+      outFiles := outFiles.insert "gexf"
+        (Graph.toGexf graph₂ toModule sizes (barycenterIters := barycenterIters))
     return outFiles
 
   let outFiles ← if args.hasFlag "skip-build" then do
@@ -205,6 +207,7 @@ def graph : Cmd := `[Cli|
     "mark-package";            "Visually highlight the package containing the first `--to` target (used in combination with some `--include-XXX`)."
     "mark-sorry";              "Visually highlight modules containing sorries."
     "skip-build";              "Build the graph by parsing imports from source files; skips loading `.olean` files. Decl counts will be 0 and `--mark-sorry` will be ignored."
+    "name-sort-layers";        "In layered layouts, sort nodes within each layer alphabetically instead of by the default barycenter heuristic."
 
   ARGS:
     ...outputs : String;  "Filename(s) for the output. \

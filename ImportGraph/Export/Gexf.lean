@@ -52,9 +52,10 @@ Metadata can be stored in forms of attributes, currently we record the following
 * `layerX` (Nat): within-layer index from a barycenter sweep over the
   layered DAG, used by layered layouts in the visualization.
 -/
-public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name) (sizes : NameMap Nat) : String :=
+public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
+    (sizes : NameMap Nat) (barycenterIters : Nat := 8) : String :=
   let layers : NameMap Nat := graph.topologicalLayers
-  let layerXs : NameMap Nat := graph.withinLayerIndices layers
+  let layerXs : NameMap Nat := graph.withinLayerIndices layers (iters := barycenterIters)
   let nodes : String := graph.foldl
     (fun acc n _ => acc ++ nodeTemplate n module
       (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)) ""
