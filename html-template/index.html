@@ -405,31 +405,26 @@ var render_gexf = (gexf) => {
   // node attributes from the GEXF), so the browser only has to scale and
   // center them into sigma's coordinate space.
   var applyLayered = function (rankdir) {
-    // Layer width = number of nodes in the most-populated layer; sets the
-    // overall aspect so vertical layouts use the full coordinate range too.
-    var layerSize = {};
+    // layerX values are now folder-column-aware (precomputed in Lean), so the
+    // range across all nodes defines the overall width. We center the whole
+    // layout on (maxLayerX / 2) so individual folder columns keep their
+    // relative positions across layers.
     var maxLayer = 0;
+    var maxLayerX = 0;
     for (let node of graph.nodes()) {
       var nd = graph.getNodeAttributes(node);
       var l = +nd.layer || 0;
-      layerSize[l] = (layerSize[l] || 0) + 1;
+      var lx = +nd.layerX || 0;
       if (l > maxLayer) maxLayer = l;
+      if (lx > maxLayerX) maxLayerX = lx;
     }
-    var maxLayerSize = 1;
-    for (var l = 0; l <= maxLayer; l++) {
-      if ((layerSize[l] || 0) > maxLayerSize) maxLayerSize = layerSize[l];
-    }
-    // Map (layer, layerX) into a centered ~100×100 box. For vertical layout
-    // (TB), layer ↦ y and layerX ↦ x; horizontal (LR) swaps them. Y is flipped
-    // so layer 0 (leaves of the DAG) appears at the top of the viewport.
     var dyAxis = 100 / Math.max(maxLayer, 1);
-    var dxAxis = 100 / Math.max(maxLayerSize - 1, 1);
+    var dxAxis = 100 / Math.max(maxLayerX, 1);
     for (let node of graph.nodes()) {
       var d = graph.getNodeAttributes(node);
       var layer = +d.layer || 0;
       var lx = +d.layerX || 0;
-      var size = layerSize[layer] || 1;
-      var alongLayer = (lx - (size - 1) / 2) * dxAxis;
+      var alongLayer = (lx - maxLayerX / 2) * dxAxis;
       var alongRank  = (layer - maxLayer / 2) * dyAxis;
       if (rankdir === 'LR') {
         d.x =  alongRank;

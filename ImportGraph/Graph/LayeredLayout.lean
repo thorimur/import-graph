@@ -83,4 +83,65 @@ public def withinLayerIndices (m : NameMap (Array Name)) (layers : NameMap Nat)
       result := result.insert b[i]! i
   return result
 
+/--
+Re-index `layerXs` so each folder (= first sub-component of the name after
+stripping `module`) occupies its own variable-width column spanning all
+layers. A folder's column width is the largest count of folder-members at
+any single layer; within each layer, that folder's nodes (if any) are
+centered inside the column, with the within-column order taken from the
+incoming `layerXs`. Adjacent folder columns are separated by `gap` slots.
+-/
+public def withFolderColumns (m : NameMap (Array Name)) (module : Name)
+    (layers : NameMap Nat) (layerXs : NameMap Nat) (gap : Nat := 1) :
+    NameMap Nat := Id.run do
+  let maxLayer := layers.foldl (init := 0) (fun acc _ l => max acc l)
+  let numLayers := maxLayer + 1
+  let folderOf (n : Name) : Name :=
+    (n.replacePrefix module .anonymous).components.head?.getD .anonymous
+
+  -- Per-(folder, layer) counts → per-folder width (max count over layers).
+  let mut folderCounts : NameMap (Array Nat) := {}
+  for (n, _) in m do
+    let f := folderOf n
+    let l := (layers.find? n).getD 0
+    let counts := (folderCounts.find? f).getD (Array.replicate numLayers 0)
+    folderCounts := folderCounts.insert f (counts.modify l (· + 1))
+  let folderWidth : NameMap Nat :=
+    folderCounts.foldl (init := {}) (fun acc f counts =>
+      acc.insert f (counts.foldl max 0))
+
+  -- Folder x-offsets in `NameMap` (alphabetical) iteration order.
+  let mut folderOffset : NameMap Nat := {}
+  let mut acc := 0
+  let mut first := true
+  for (f, _) in folderCounts do
+    if !first then acc := acc + gap
+    first := false
+    folderOffset := folderOffset.insert f acc
+    acc := acc + (folderWidth.find? f).getD 1
+
+  -- Bucket nodes by layer, ordered by incoming layerXs (so within-folder
+  -- order follows the barycenter / alphabetical sort that produced it).
+  let mut byLayer : Array (Array Name) := Array.replicate numLayers #[]
+  for (n, _) in m do
+    let l := (layers.find? n).getD 0
+    byLayer := byLayer.modify l (·.push n)
+
+  let mut result : NameMap Nat := {}
+  for layer in [0:byLayer.size] do
+    let sorted := byLayer[layer]!.qsort (fun a b =>
+      (layerXs.find? a).getD 0 < (layerXs.find? b).getD 0)
+    let mut byFolder : NameMap (Array Name) := {}
+    for n in sorted do
+      let f := folderOf n
+      byFolder := byFolder.insert f (((byFolder.find? f).getD #[]).push n)
+    -- Within each folder, center this layer's nodes inside the column.
+    for (f, nodes) in byFolder do
+      let width := (folderWidth.find? f).getD 1
+      let offset := (folderOffset.find? f).getD 0
+      let centerPad := (width - nodes.size) / 2
+      for i in [0:nodes.size] do
+        result := result.insert nodes[i]! (offset + centerPad + i)
+  return result
+
 end Lean.NameMap
