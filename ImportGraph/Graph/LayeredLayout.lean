@@ -6,6 +6,7 @@ Authors: Thomas Murrills
 module
 
 public import ImportGraph.Graph.Layers
+public import ImportGraph.Lean.Name
 
 /-!
 # Layered layout: within-layer ordering
@@ -98,8 +99,7 @@ public def withFolderColumns (m : NameMap (Array Name)) (module : Name)
     NameMap Nat := Id.run do
   let maxLayer := layers.foldl (init := 0) (fun acc _ l => max acc l)
   let numLayers := maxLayer + 1
-  let folderOf (n : Name) : Name :=
-    (n.replacePrefix module .anonymous).components.head?.getD .anonymous
+  let folderOf (n : Name) : Name := n.folderUnder module
 
   -- `cells[folder]` is indexed by layer; each entry is the list of nodes in
   -- that (folder, layer) cell, initially in alphabetical order.

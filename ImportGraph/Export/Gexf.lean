@@ -35,7 +35,16 @@ public def getNumberOfDeclsPerFile (env: Environment) : NameMap Nat :=
     ) {}
 
 /-- Gexf template for a node in th graph. -/
-private def Gexf.nodeTemplate (n module : Name) (size layer layerX : Nat) := s!"<node id=\"{n}\" label=\"{n}\"><attvalues><attvalue for=\"0\" value=\"{size}\" /><attvalue for=\"1\" value=\"{module.isPrefixOf n}\" /><attvalue for=\"2\" value=\"{layer}\" /><attvalue for=\"3\" value=\"{layerX}\" /></attvalues></node>\n          "
+private def Gexf.nodeTemplate (n module : Name) (size layer layerX : Nat)
+    (importsScope importedScope : String) :=
+  s!"<node id=\"{n}\" label=\"{n}\"><attvalues>\
+      <attvalue for=\"0\" value=\"{size}\" />\
+      <attvalue for=\"1\" value=\"{module.isPrefixOf n}\" />\
+      <attvalue for=\"2\" value=\"{layer}\" />\
+      <attvalue for=\"3\" value=\"{layerX}\" />\
+      <attvalue for=\"4\" value=\"{importsScope}\" />\
+      <attvalue for=\"5\" value=\"{importedScope}\" />\
+    </attvalues></node>\n          "
 
 /-- Gexf template for an edge in the graph -/
 private def Gexf.edgeTemplate (source target : Name) := s!"<edge source=\"{source}\" target=\"{target}\" id=\"{source}--{target}\" />\n          "
@@ -61,9 +70,40 @@ public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
       graph.withFolderColumns module layers (iters := barycenterIters)
     else
       graph.withinLayerIndices layers (iters := barycenterIters)
+  -- Classify each node by where its imports / importers live relative to its
+  -- own folder. `importsScope` is about the imports the node makes (upstream),
+  -- `importedScope` about who imports it (downstream). Both have the same
+  -- four categories: "none" / "in" / "out" / "both".
+  let importsScopeOf (n : Name) : String :=
+    let f := n.folderUnder module
+    let imps := (graph.find? n).getD #[]
+    if imps.isEmpty then "none"
+    else
+      let (hasIn, hasOut) := imps.foldl (init := (false, false))
+        (fun (i, o) imp =>
+          if imp.folderUnder module == f then (true, o) else (i, true))
+      if hasIn && hasOut then "both"
+      else if hasOut then "out"
+      else "in"
+  -- Aggregate, over the whole graph, the in-folder vs out-of-folder "importer"
+  -- presence for each node.
+  let (importedInSet, importedOutSet) : NameSet × NameSet :=
+    graph.foldl (init := (∅, ∅)) (fun acc m deps =>
+      let mFolder := m.folderUnder module
+      deps.foldl (init := acc) (fun (i, o) d =>
+        if mFolder == d.folderUnder module then (i.insert d, o)
+        else (i, o.insert d)))
+  let importedScopeOf (n : Name) : String :=
+    let hasIn := importedInSet.contains n
+    let hasOut := importedOutSet.contains n
+    if hasIn && hasOut then "both"
+    else if hasIn then "in"
+    else if hasOut then "out"
+    else "none"
   let nodes : String := graph.foldl
     (fun acc n _ => acc ++ nodeTemplate n module
-      (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)) ""
+      (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)
+      (importsScopeOf n) (importedScopeOf n)) ""
   let edges : String := graph.foldl (fun acc n i => acc ++ (i.foldl (fun b j => b ++ edgeTemplate j n) "")) ""
   s!"<?xml version='1.0' encoding='utf-8'?>
     <gexf xmlns=\"http://www.gexf.net/1.2draft\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.gexf.net/1.2draft http://www.gexf.net/1.2draft/gexf.xsd\" version=\"1.2\">
@@ -76,6 +116,8 @@ public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
           <attribute id=\"1\" title=\"in_module\" type=\"boolean\" />
           <attribute id=\"2\" title=\"layer\" type=\"long\" />
           <attribute id=\"3\" title=\"layerX\" type=\"long\" />
+          <attribute id=\"4\" title=\"importsScope\" type=\"string\" />
+          <attribute id=\"5\" title=\"importedScope\" type=\"string\" />
         </attributes>
         <nodes>
           {nodes.trimAscii}

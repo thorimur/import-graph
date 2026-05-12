@@ -64,3 +64,14 @@ public def getModule (name : Name) (s := "") : Name :=
     | .anonymous => .mkSimple s
     | .num _ _ => panic s!"panic in `getModule`: did not expect numerical name: {name}."
     | .str pre s => getModule pre s
+
+end ImportGraph
+
+/-- The "folder" of `n` relative to a project `module`: the first sub-component
+of the name after stripping `module`. For example, for `module = `ImportGraph`,
+`folderUnder` of `ImportGraph.Tools.FindHome` is `Tools`. For names that are
+not under `module`, returns the first component of the name (so external deps
+like `Lean.Environment` get folder `Lean`). Returns `Name.anonymous` for the
+module itself. -/
+public def folderUnder (n module : Name) : Name :=
+  (n.replacePrefix module .anonymous).components.head?.getD .anonymous

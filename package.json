@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@sigma/node-border": "^3.0.0",
+    "@sigma/node-square": "^3.0.0",
     "esbuild": "^0.28.0",
     "graphology": "^0.26.0",
     "graphology-gexf": "^0.13.2",

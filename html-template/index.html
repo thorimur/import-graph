@@ -317,9 +317,22 @@ var render_gexf = (gexf) => {
     if (note) note.style.display = 'none';
   }
 
+  // Two-channel category encoding. `importsScope` (upstream) drives the body
+  // fill; `importedScope` (downstream) drives the stroke.
+  //   none → black,  in → folder color,  out → white,  both → pastel.
+  var category_color = function (scope, node_data) {
+    switch (scope) {
+      case 'none': return '#000000';
+      case 'out':  return '#ffffff';
+      case 'both': return get_color(node_data, 0.4, 0.85);
+      case 'in':
+      default:     return get_color(node_data);
+    }
+  };
+
   // color the nodes
   for (let {node, attributes: node_data} of graph.nodeEntries()) {
-    graph.setNodeAttribute(node, 'color', get_color(node_data));
+    graph.setNodeAttribute(node, 'color', category_color(node_data.importsScope, node_data));
     if (preferDark) {
       graph.setNodeAttribute(node, 'dark_color', get_color(node_data, 1, 0.6));
       graph.setNodeAttribute(node, 'dim_color', get_color(node_data, .8, 3/8));
@@ -333,7 +346,13 @@ var render_gexf = (gexf) => {
 
   //size the nodes
   for (let {node, attributes: node_data} of graph.nodeEntries()) {
-    node_data.size = 2 + Math.sqrt(node_data.decl_count) * 9 / Math.sqrt(max_decls);
+    var s = 2 + Math.sqrt(node_data.decl_count) * 9 / Math.sqrt(max_decls);
+    // Under `--skip-build` decl counts are all 0 so size carries no info; in
+    // that case fall back to encoding leafiness in size (non-leaves bigger).
+    if (max_decls === 0 && node_data.importedScope !== 'none') s *= 1.6;
+    node_data.size = s;
+    node_data.borderColor = category_color(node_data.importedScope, node_data);
+    node_data.borderSize = 1.5;
   }
 
   // set up the edge weights, to make the layout somewhat ok
@@ -473,7 +492,19 @@ var render_gexf = (gexf) => {
     window.renderer.kill();
     delete window.renderer;
   }
+  // Bordered circle program: reads `borderSize` and `borderColor` from each
+  // node so we can encode the `importsScope` category as a stroke.
+  var BorderedNodeProgram = SigmaNodeBorder.createNodeBorderProgram({
+    borders: [
+      { size: { attribute: "borderSize", defaultValue: 0, mode: "pixels" },
+        color: { attribute: "borderColor", defaultValue: "rgba(0,0,0,0)" } },
+      { size: { fill: true }, color: { attribute: "color" } },
+    ],
+  });
+
   window.renderer = new Sigma.Sigma(graph, container, {
+    defaultNodeType: "bordered",
+    nodeProgramClasses: { bordered: BorderedNodeProgram },
     defaultEdgeType: "arrow",
     defaultEdgeColor: preferDark ? "#707070" : "#c0c0c0",
     // TODO: I couldn't change the color, so this is disabling labels in dark mode
