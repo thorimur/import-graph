@@ -169,9 +169,7 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
         let exeDir := (FilePath.parent (← IO.appPath) |>.get!) / ".." / ".." / ".."
         let mut html ← IO.FS.readFile <| ← IO.FS.realPath ( exeDir / "html-template" / "index.html")
         for dep in (#[
-            "vendor" / "sigma.min.js",
-            "vendor" / "graphology.min.js",
-            "vendor" / "graphology-library.min.js" ] : Array FilePath) do
+            "vendor" / "sigma-bundle.min.js" ] : Array FilePath) do
           let depContent ← IO.FS.readFile <| ← IO.FS.realPath (exeDir / "html-template" / dep)
           html := html.replace s!"<script src=\"{dep}\"></script>" s!"<script>{depContent}</script>"
         -- inline the graph data

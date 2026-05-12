@@ -7,11 +7,12 @@
   <!-- Note `<title>import graph</title>` is searched for by `lake exe graph`, keep it updated there. -->
   <title>import graph</title>
 
-  <!-- NOTE: currently the Lean script searches for these imports to replace them (exact search)!
-       If you modify it, modify the Lean script (ImportGraph/Cli.lean) accordingly! -->
-  <script src="vendor/sigma.min.js"></script>
-  <script src="vendor/graphology.min.js"></script>
-  <script src="vendor/graphology-library.min.js"></script>
+  <!-- NOTE: currently the Lean script searches for this import to replace it (exact search)!
+       If you modify it, modify the Lean script (MainGraph.lean) accordingly.
+       The bundle is built from `scripts/vendor-entry.mjs` via
+       `node scripts/build-vendor.mjs`; regenerate it after bumping
+       npm dependencies in `package.json`. -->
+  <script src="vendor/sigma-bundle.min.js"></script>
 
   <link rel="stylesheet" href="style.css" />
   <style>
@@ -228,7 +229,7 @@ var render_gexf = (gexf) => {
   var default_hover = !!params.get("default_hover");
 
   // unpack the node labels into data
-  for (let [node, node_data] of graph.nodeEntries()) {
+  for (let {node, attributes: node_data} of graph.nodeEntries()) {
     // In line with the `--exclude-meta` option
     let path = (node == '«Mathlib.Tactics»') ? [node] : node.split('.');
     node_data.proj = path[0];
@@ -247,7 +248,7 @@ var render_gexf = (gexf) => {
 
   // represent the directory tree as a nested map
   var tree = new Map();
-  for (let [node, node_data] of graph.nodeEntries()) {
+  for (let {node, attributes: node_data} of graph.nodeEntries()) {
     var at = tree;
     for (let p of node_data.path) {
       var curr = at.get(p);
@@ -304,7 +305,7 @@ var render_gexf = (gexf) => {
 
   // get max decl count
   let max_decls = 0
-  for (let [node, node_data] of graph.nodeEntries()) {
+  for (let {node, attributes: node_data} of graph.nodeEntries()) {
     if (node_data.decl_count > max_decls) {
       max_decls = node_data.decl_count
     }
@@ -317,7 +318,7 @@ var render_gexf = (gexf) => {
   }
 
   // color the nodes
-  for (let [node, node_data] of graph.nodeEntries()) {
+  for (let {node, attributes: node_data} of graph.nodeEntries()) {
     graph.setNodeAttribute(node, 'color', get_color(node_data));
     if (preferDark) {
       graph.setNodeAttribute(node, 'dark_color', get_color(node_data, 1, 0.6));
@@ -331,12 +332,12 @@ var render_gexf = (gexf) => {
   }
 
   //size the nodes
-  for (let [node, node_data] of graph.nodeEntries()) {
+  for (let {node, attributes: node_data} of graph.nodeEntries()) {
     node_data.size = 2 + Math.sqrt(node_data.decl_count) * 9 / Math.sqrt(max_decls);
   }
 
   // set up the edge weights, to make the layout somewhat ok
-  for (let [key, attrs, s, t, sdata, tdata] of graph.edgeEntries()) {
+  for (let {edge: key, attributes: attrs, source: s, target: t, sourceAttributes: sdata, targetAttributes: tdata} of graph.edgeEntries()) {
     var ncommon = common_prefix(sdata.path, tdata.path);
     if (sdata.proj != tdata.proj) {
       attrs.weight = 1
@@ -475,7 +476,6 @@ var render_gexf = (gexf) => {
   window.renderer = new Sigma.Sigma(graph, container, {
     defaultEdgeType: "arrow",
     defaultEdgeColor: preferDark ? "#707070" : "#c0c0c0",
-    minArrowSize: 30,
     // TODO: I couldn't change the color, so this is disabling labels in dark mode
     labelRenderedSizeThreshold: preferDark ? 1000000000 : 9,
       zIndex: true,
@@ -568,7 +568,7 @@ var render_gexf = (gexf) => {
       state.hoveredPath = top_level;
       let nfiles = 0;
       let ndecls = 0;
-      for (let [n, node_data] of graph.nodeEntries()) {
+      for (let {node: n, attributes: node_data} of graph.nodeEntries()) {
         if (node_data.path[0] == top_level) {
           nfiles += 1;
           ndecls += node_data.decl_count;

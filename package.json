@@ -1,0 +1,19 @@
+{
+  "name": "import-graph-vendor",
+  "private": true,
+  "type": "module",
+  "description": "Build script for the vendored Sigma.js + graphology bundle used by `lake exe graph`.",
+  "scripts": {
+    "build-vendor": "node scripts/build-vendor.mjs"
+  },
+  "devDependencies": {
+    "@sigma/node-border": "^3.0.0",
+    "esbuild": "^0.28.0",
+    "graphology": "^0.26.0",
+    "graphology-gexf": "^0.13.2",
+    "graphology-layout-forceatlas2": "^0.10.1",
+    "graphology-operators": "^1.6.1",
+    "graphology-traversal": "^0.3.1",
+    "sigma": "^3.0.3"
+  }
+}
