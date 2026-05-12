@@ -113,12 +113,17 @@ def importGraphCLI (args : Cli.Parsed) : IO UInt32 := do
       let graph₂ := match args.flag? "to" with
         | none => graph.filter (fun n _ => ! if to.contains `Mathlib then #[`Mathlib, `Mathlib.Tactic].contains n else to.contains n)
         | some _ => graph
-      let barycenterIters := if args.hasFlag "name-sort-layers" then 0 else 8
+      let scopeSortLayers := args.hasFlag "scope-sort-layers"
+      let nameSortLayers := args.hasFlag "name-sort-layers"
+      -- Either explicit sort flag disables barycenter; `scope-sort-layers`
+      -- wins if both are set (it carries the most information).
+      let barycenterIters := if scopeSortLayers || nameSortLayers then 0 else 8
       let folderColumns := args.hasFlag "folder-columns"
       outFiles := outFiles.insert "gexf"
         (Graph.toGexf graph₂ toModule sizes
           (barycenterIters := barycenterIters)
-          (folderColumns := folderColumns))
+          (folderColumns := folderColumns)
+          (scopeSortLayers := scopeSortLayers))
     return outFiles
 
   let outFiles ← if args.hasFlag "skip-build" then do
@@ -210,6 +215,7 @@ def graph : Cmd := `[Cli|
     "skip-build";              "Build the graph by parsing imports from source files; skips loading `.olean` files. Decl counts will be 0 and `--mark-sorry` will be ignored."
     "name-sort-layers";        "In layered layouts, sort nodes within each layer alphabetically instead of by the default barycenter heuristic."
     "folder-columns";          "In layered layouts, give each folder (first sub-namespace under `--to`) its own variable-width column with barycenter applied per-cell."
+    "scope-sort-layers";       "In layered layouts, sort nodes within each layer (or per-folder cell) by their (upstream+downstream) import-scope category, with ties broken by upstream-downstream. Takes precedence over `--name-sort-layers`."
 
   ARGS:
     ...outputs : String;  "Filename(s) for the output. \

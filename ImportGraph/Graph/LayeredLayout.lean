@@ -31,7 +31,9 @@ bottom-up barycenter sweeps over `iters` iterations.
 `layers` must agree with `topologicalLayers m`.
 -/
 public def withinLayerIndices (m : NameMap (Array Name)) (layers : NameMap Nat)
-    (iters : Nat := 8) : NameMap Nat := Id.run do
+    (iters : Nat := 8)
+    (cmp : Name → Name → Bool := fun a b => a.toString < b.toString) :
+    NameMap Nat := Id.run do
   -- Reverse adjacency: `succ[n]` = modules that import `n`.
   let mut succ : NameMap (Array Name) := {}
   for (n, deps) in m do
@@ -45,8 +47,8 @@ public def withinLayerIndices (m : NameMap (Array Name)) (layers : NameMap Nat)
     let l := (layers.find? n).getD 0
     buckets := buckets.modify l (·.push n)
 
-  -- Initial within-layer order: alphabetical. Seeds the barycenter sweeps.
-  buckets := buckets.map (fun b => b.qsort (·.toString < ·.toString))
+  -- Initial within-layer order from `cmp` (alphabetical by default).
+  buckets := buckets.map (fun b => b.qsort cmp)
   let mut xs : NameMap Float := {}
   for b in buckets do
     for i in [0:b.size] do
@@ -95,7 +97,8 @@ permuting nodes inside their fixed folder column. Adjacent folder columns
 are separated by `gap` slots.
 -/
 public def withFolderColumns (m : NameMap (Array Name)) (module : Name)
-    (layers : NameMap Nat) (iters : Nat := 8) (gap : Nat := 1) :
+    (layers : NameMap Nat) (iters : Nat := 8) (gap : Nat := 1)
+    (cmp : Name → Name → Bool := fun a b => a.toString < b.toString) :
     NameMap Nat := Id.run do
   let maxLayer := layers.foldl (init := 0) (fun acc _ l => max acc l)
   let numLayers := maxLayer + 1
@@ -110,7 +113,7 @@ public def withFolderColumns (m : NameMap (Array Name)) (module : Name)
     let layerArr := (cells.find? f).getD (Array.replicate numLayers #[])
     cells := cells.insert f (layerArr.modify l (·.push n))
   cells := cells.foldl (init := {}) (fun acc f layerArr =>
-    acc.insert f (layerArr.map (·.qsort (·.toString < ·.toString))))
+    acc.insert f (layerArr.map (·.qsort cmp)))
 
   -- Folder widths and x-offsets. Folder column order = `NameMap` order.
   let folderWidth : NameMap Nat :=

@@ -63,18 +63,18 @@ Metadata can be stored in forms of attributes, currently we record the following
 -/
 public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
     (sizes : NameMap Nat) (barycenterIters : Nat := 8)
-    (folderColumns : Bool := false) : String :=
+    (folderColumns : Bool := false) (scopeSortLayers : Bool := false) : String :=
   let layers : NameMap Nat := graph.topologicalLayers
-  let layerXs : NameMap Nat :=
-    if folderColumns then
-      graph.withFolderColumns module layers (iters := barycenterIters)
-    else
-      graph.withinLayerIndices layers (iters := barycenterIters)
-  -- Classify each node by where its imports / importers live relative to its
-  -- own folder. `importsScope` is about the imports the node makes (upstream),
-  -- `importedScope` about who imports it (downstream). Both have the same
-  -- four categories: "none" / "in" / "out" / "both".
-  let importsScopeOf (n : Name) : String :=
+  -- `cmp` controls within-layer (and within-cell) initial ordering. Under
+  -- `--scope-sort-layers` we sort by the upstream/downstream import-scope
+  -- profile of each node (computed below) instead of alphabetically.
+  let scopeVal : String → Int
+    | "none" => 0
+    | "in"   => 1
+    | "both" => 2
+    | "out"  => 3
+    | _      => 0
+  let importsScopeOf : Name → String := fun n =>
     let f := n.folderUnder module
     let imps := (graph.find? n).getD #[]
     if imps.isEmpty then "none"
@@ -85,21 +85,39 @@ public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
       if hasIn && hasOut then "both"
       else if hasOut then "out"
       else "in"
-  -- Aggregate, over the whole graph, the in-folder vs out-of-folder "importer"
-  -- presence for each node.
   let (importedInSet, importedOutSet) : NameSet × NameSet :=
     graph.foldl (init := (∅, ∅)) (fun acc m deps =>
       let mFolder := m.folderUnder module
       deps.foldl (init := acc) (fun (i, o) d =>
         if mFolder == d.folderUnder module then (i.insert d, o)
         else (i, o.insert d)))
-  let importedScopeOf (n : Name) : String :=
+  let importedScopeOf : Name → String := fun n =>
     let hasIn := importedInSet.contains n
     let hasOut := importedOutSet.contains n
     if hasIn && hasOut then "both"
     else if hasIn then "in"
     else if hasOut then "out"
     else "none"
+  let scopeCmp (a b : Name) : Bool :=
+    let ia := scopeVal (importsScopeOf a)
+    let da := scopeVal (importedScopeOf a)
+    let ib := scopeVal (importsScopeOf b)
+    let db := scopeVal (importedScopeOf b)
+    let sa := ia + da
+    let sb := ib + db
+    if sa ≠ sb then sa < sb
+    else
+      let ta := ia - da
+      let tb := ib - db
+      if ta ≠ tb then ta < tb
+      else a.toString < b.toString
+  let cmp : Name → Name → Bool :=
+    if scopeSortLayers then scopeCmp else fun a b => a.toString < b.toString
+  let layerXs : NameMap Nat :=
+    if folderColumns then
+      graph.withFolderColumns module layers (iters := barycenterIters) (cmp := cmp)
+    else
+      graph.withinLayerIndices layers (iters := barycenterIters) (cmp := cmp)
   let nodes : String := graph.foldl
     (fun acc n _ => acc ++ nodeTemplate n module
       (sizes.getD n 0) (layers.getD n 0) (layerXs.getD n 0)
