@@ -103,14 +103,9 @@ public def Graph.toGexf (graph : NameMap (Array Name)) (module : Name)
     let da := scopeVal (importedScopeOf a)
     let ib := scopeVal (importsScopeOf b)
     let db := scopeVal (importedScopeOf b)
-    let sa := ia + da
-    let sb := ib + db
-    if sa ≠ sb then sa < sb
-    else
-      let ta := ia - da
-      let tb := ib - db
-      if ta ≠ tb then ta < tb
-      else a.toString < b.toString
+    if ia ≠ ib then ia < ib
+    else if da ≠ db then da < db
+    else a.toString < b.toString
   let cmp : Name → Name → Bool :=
     if scopeSortLayers then scopeCmp else fun a b => a.toString < b.toString
   let layerXs : NameMap Nat :=
