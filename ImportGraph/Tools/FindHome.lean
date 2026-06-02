@@ -9,7 +9,7 @@ public meta import Lean.Elab.Command
 public meta import Lean.Widget.UserWidget
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Imports.ImportGraph
-public meta import ImportGraph.Graph.TransitiveClosure
+meta import all ImportGraph.Graph.TransitiveClosure
 meta import all Lean.ExtraModUses
 public meta import Lake.CLI.Shake
 import all Lake.CLI.Shake
@@ -223,7 +223,6 @@ Notes:
 -- set_option Elab.async false
 #show_shake
 def foo : MetaM Bool := do
-  let stx ← `(term| NameMap.transitiveClosure)
   return test2%
 
 
@@ -463,6 +462,14 @@ def Needs.transitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Ne
   toNat := a.toNat &&& b.toNat
 
 /-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.pub ≤ b.priv. Does not transitively close the `Needs`. `false` includes incomparable. -/
+@[inline] def Needs.covers (k : NeedsKind) (a : Needs) (i : ) : Bool :=
+  -- NeedsKind.all.all fun k => a.get k |>.le b.get k
+  a.pub.le b.pub
+    && a.priv.le b.priv
+    && a.metaPub.le b.metaPub
+    && a.metaPriv.le b.metaPriv
+
+/-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.pub ≤ b.priv. Does not transitively close the `Needs`. `false` includes incomparable. -/
 @[inline] def Needs.le (a b : Needs) : Bool :=
   -- NeedsKind.all.all fun k => a.get k |>.le b.get k
   a.pub.le b.pub
@@ -509,6 +516,62 @@ def Needs.fillTransDeps (transDeps : Array Needs) : Array Needs :=
       return as
   return as.push a
 
+@[inline] def _root_.Lean.Import.toNeedsKind (imp : Import) : NeedsKind :=
+  if imp.importAll || !imp.isExported then -- `priv` case; assumes no `public import all`
+    if imp.isMeta then .metaPriv else .priv
+  else
+    if imp.isMeta then .metaPub else .pub
+
+
+/--
+Given module `j`'s transitive dependencies, computes the union of `transImps` and the transitive
+dependencies resulting from importing the module via `imp` according to the rules of
+`State.transDeps`.
+-/
+def addTransitiveImps' (transImps : Needs) (imp : Import) (j : Nat) (impTransImps : Needs) : Needs := Id.run do
+  -- Note that `transImps.union` just means "accept also the following implications";
+  -- `union ⟨p,m⟩` means that the thing being implied is of the form `>ᵐₚ`;
+  -- `impTransImps.get ⟨p,m⟩` means that the antecedent `>` on the lhs of the implies is of the form `>ᵐₚ`;
+  -- `for k in ...` is how we effect the universal quantifications over e.g. `m`;
+  -- `impk := ⟨p,m⟩` records `j ⋗ᵐₚ i`, which is given.
+
+  let mut transImps := transImps
+  let impk := imp.toNeedsKind
+  -- `⋗ᵐₚ => >ᵐₚ`
+  transImps := transImps.union impk {j}
+  -- `>ᵐ₁ ⋗ⁿₚ => >^{m ∨ n}_p`
+  for k in #[NeedsKind.pub, .metaPub] do -- ∀ (m, 1)
+    transImps := transImps.union
+      { isMeta := k.isMeta || impk.isMeta, isExported := impk.isExported }
+      (impTransImps.get k) -- j' >ᵐ₁ j
+  -- `>ᵐ₀ ⋗⁰₂ => >ᵐ₀`
+  if imp.importAll && !imp.isMeta then -- only apply to `⋗⁰₂`
+    for k in #[NeedsKind.priv, .metaPriv] do -- ∀ (m, 0)
+      transImps := transImps.union k (impTransImps.get k)
+  transImps
+
+partial def initStateFromEnv' (env : Environment) : State := Id.run do
+  let mut s := { env }
+  for i in 0...env.header.moduleData.size do
+    let mod := env.header.moduleData[i]!
+    let mut imps := #[]
+    let mut transImps := Needs.empty
+    for imp in mod.imports do
+      let j := env.getModuleIdx? imp.module |>.get!
+      imps := imps.push j
+      transImps := addTransitiveImps' transImps imp j s.transDeps[j]!
+    s := { s with transDeps := s.transDeps.push transImps }
+  s := { s with transDepsOrig := s.transDeps }
+  return s
+
+deriving instance BEq for Needs
+
+/-- info: true -/
+#guard_msgs in
+run_cmd do
+  let s := initStateFromEnv (← getEnv)
+  let s' := initStateFromEnv' (← getEnv)
+  logInfo m!"{s.transDeps == s'.transDeps}"
 
 /-- `needs` does not need to be transitively closed. -/
 def Needs.coverings (filledRflTransDeps : Array Needs) (needs : Needs) : Array ModuleIdx := Id.run do
@@ -516,10 +579,23 @@ def Needs.coverings (filledRflTransDeps : Array Needs) (needs : Needs) : Array M
   let mut b := false
   for h : i in 0...filledRflTransDeps.size do
     if needs.le filledRflTransDeps[i] then
+      -- TODO: be cleverer about this? Can we skip entire attempts?
+      -- Or maybe totally different data structure? List, perhaps?
+      -- Traversing in one direction or another
       mods := mods.incorporateBelow i fun a b => filledRflTransDeps[a]!.le filledRflTransDeps[b]!
   return mods.reduceOption
 
-
+def Needs.reduce (a : Needs) (transDeps : Array Needs) : Needs := Id.run do
+  let mut reduced := a
+  let mut covered := Needs.empty
+  for (k, i) in a do -- note: traverses high to low
+  --   reduced := reduced.sub k (transDeps[i]!.get k) -- correct?? or need to reckon with priv/pub?
+  --   -- I suspect this is very wrong and actually we want to subtract `addTransitiveImps`-style.
+  -- return reduced -- does this work???
+    unless covered.covers k i do
+      reduced := reduced.modify k (· ∪ {i})
+    covered := addTransitiveImps covered { k with module := .anonymous } i transDeps[i]!
+    -- or, could build up a new `reduced` from 0, only adding `i` at `k` if not in the collective `transDeps` built via `addTransitiveImports`?
 
 
 #show_imports
