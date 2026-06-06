@@ -9,7 +9,7 @@ public meta import Lean.Elab.Command
 public meta import Lean.Widget.UserWidget
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Imports.ImportGraph
-meta import all ImportGraph.Graph.TransitiveClosure
+public meta import ImportGraph.Graph.TransitiveClosure
 meta import all Lean.ExtraModUses
 public meta import Lake.CLI.Shake
 import all Lake.CLI.Shake
@@ -77,10 +77,9 @@ meta def Lake.Shake.Needs.toMessageData (env : Environment) (needs : Needs)
     (filter : Name → NeedsKind → Bool := fun _ _ => true) : MessageData := Id.run do
   let mut msg := m!""
   for k in NeedsKind.all do
-    msg := msg ++ m!"{k}:\n"
-    let s := needs.get k
+    msg := msg ++ m!"{k} ({needs.get k |>.toNat}):\n"
     for j in 0...env.allImportedModuleNames.size do
-      if s.has j && filter env.allImportedModuleNames[j]! k then
+      if needs.has k j && filter env.allImportedModuleNames[j]! k then
         msg := msg ++ m!"  {toString env.allImportedModuleNames[j]!}\n"
   return msg
 
@@ -374,20 +373,6 @@ def withFreshModRecords [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α)
         (newExtraState.union extraState)
       mergeIsExtraRevModUse env isRev asyncMode asyncDecl
 
-open Elab Command in
-elab "#show_imports" ppLine cmd:command : command => do
-  let needs ← withFreshModRecords do
-    elabCommand cmd
-    recordUsedSyntaxKinds cmd
-    let indirect := getIndirectModUsesState (← getEnv)
-    let (extras, _) := getExtraModUsesState (← getEnv)
-    let decls := cmd.raw.getPos?.get!.getDeclsAfter' (← getEnv) (← getFileMap)
-    let mut needs := .empty
-    let mut declNeeds := {}
-    for decl in decls do
-      (needs, declNeeds) := calcDeclNeeds decl (← getEnv) needs declNeeds
-    pure (needs, declNeeds, indirect, extras)
-  logInfo m!"{needs.1.toMessageData (← getEnv)}{needs.2.2}"
 
 /-
 #min_imports as widget that waits for everything by adding a linter that holds a handle to a promise, which is resolved in the infoview? Is that possible?
@@ -443,12 +428,20 @@ namespace Lake.Shake
 - meet operation on `Needs`. Might need transitive deps after all.
 -/
 
-/-- Reflexively transitively closes a `Needs`. -/
+/-- Transitively closes a `Needs`. -/
 def Needs.transitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Needs := Id.run do
   let mut needs := directNeeds
   for (k, i) in directNeeds do
     needs := addTransitiveImps needs { k with module := .anonymous } i transDeps[i]!
   return needs
+
+-- not true
+-- def Needs.irreflTransitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Needs := Id.run do
+--   let mut needs := .empty
+--   for (k, i) in directNeeds do
+--     needs := addTransitiveImps needs { k with module := .anonymous } i transDeps[i]!
+--   return needs
+
   -- or:
   -- let mut needs := directNeeds
   -- for h : i in 0...transDeps.size do
@@ -461,15 +454,9 @@ def Needs.transitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Ne
 @[inline] def Bitset.intersect (a b : Bitset) : Bitset where
   toNat := a.toNat &&& b.toNat
 
-/-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.pub ≤ b.priv. Does not transitively close the `Needs`. `false` includes incomparable. -/
-@[inline] def Needs.covers (k : NeedsKind) (a : Needs) (i : ) : Bool :=
-  -- NeedsKind.all.all fun k => a.get k |>.le b.get k
-  a.pub.le b.pub
-    && a.priv.le b.priv
-    && a.metaPub.le b.metaPub
-    && a.metaPriv.le b.metaPriv
 
-/-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.pub ≤ b.priv. Does not transitively close the `Needs`. `false` includes incomparable. -/
+
+/-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.(meta)pub ≤ b.(meta)priv. `false` includes incomparable. -/
 @[inline] def Needs.le (a b : Needs) : Bool :=
   -- NeedsKind.all.all fun k => a.get k |>.le b.get k
   a.pub.le b.pub
@@ -481,7 +468,12 @@ theorem le_eq_all_get_le_get (a b : Needs) :
     a.le b = NeedsKind.all.all fun k => a.get k |>.le <| b.get k := by
   simp [NeedsKind.all, Needs.get, Needs.le, Bool.and_assoc]
 
-def Needs.fillPriv (a : Needs) : Needs :=
+/-- Includes the public visibilities in the corresponding private visibilities, to represent a "has" relationship. Note that
+```
+a.transitiveClosure transDeps |>.linearize = a.linearize.transitiveClosure transDeps
+```
+-/
+@[inline] def Needs.linearize (a : Needs) : Needs :=
   { a with priv := a.priv ∪ a.pub, metaPriv := a.metaPriv ∪ a.metaPub }
 
 /-- Assumes the second argument is already transitively closed (not necessarily the first). Does not transitively close the `Needs`. `false` includes incomparable. -/
@@ -491,37 +483,51 @@ def Needs.le' (a b : Needs) : Bool :=
     && a.priv.le (b.priv ∪ b.pub)
     && a.metaPriv.le (b.metaPriv ∪ b.metaPub)
 
-@[inline] def Needs.reflexify (i : Nat) (a : Needs) : Needs where
+def Needs.reflOf (i : Nat) : Needs where
+  pub := {i}
+  priv := {i}
+  metaPub := ∅
+  metaPriv := ∅
+
+/-- Adds in the reflexive availibilities of a given module, which are just the public and private availabilities and not the meta phase versions. This matches what is available within a given module. Equivalent to `a ∪ .reflOf i`.
+
+Note that this operation does *not* necessarily commute with transitive closure.
+-/
+@[inline] def Needs.reflexify (i : Nat) (a : Needs) : Needs := { a with
   pub := a.pub ∪ {i}
-  priv := a.priv ∪ {i}
-  metaPub := a.metaPub ∪ {i}
-  metaPriv := a.metaPriv ∪ {i}
+  priv := a.priv ∪ {i} }
+
+/-- Linearizes and reflexifies. Note that
+```
+a.transitiveClosure transDeps |>.fill = a.fill.transitiveClosure transDeps
+```
+-/
+@[inline] def Needs.fill (i : Nat) (a : Needs) : Needs := a.linearize.reflexify i
 
 def Needs.fillTransDeps (transDeps : Array Needs) : Array Needs :=
-  transDeps.mapIdx fun i n => n.fillPriv.reflexify i
+  /- Note that `.linearize` commutes with `.reflexify`. -/
+  transDeps.mapIdx fun i n => n.linearize.reflexify i
 
 @[inline] def _root_.Array.filter' (a : Array α) (f : α → Bool) : Array α × Bool :=
   let s := a.size
   let a := a.filter f
   (a, a.size ≠ s)
 
-@[inline] def _root_.Array.incorporateBelow (as : Array (Option α)) (a : α)
-    (le : α → α → Bool) : Array (Option α) := Id.run do
-  let mut as := as
-  for i in 0...as.size do
-    let some aᵢ := as[i]! | continue
-    if le a aᵢ then
-      as := as.set! i none
-    else if le aᵢ a then
-      return as
-  return as.push a
+-- @[inline] def _root_.Array.incorporateBelow (as : Array (Option α)) (a : α)
+--     (le : α → α → Bool) : Array (Option α) := Id.run do
+--   let mut as := as
+--   for i in 0...as.size do
+--     let some aᵢ := as[i]! | continue
+--     if le a aᵢ then
+--       as := as.set! i none
+--     else if le aᵢ a then
+--       return as
+--   return as.push a
 
 @[inline] def _root_.Lean.Import.toNeedsKind (imp : Import) : NeedsKind :=
-  if imp.importAll || !imp.isExported then -- `priv` case; assumes no `public import all`
-    if imp.isMeta then .metaPriv else .priv
-  else
-    if imp.isMeta then .metaPub else .pub
+  { imp with }
 
+-- TODO: we need composition here. Both of generators/imports and `>`.
 
 /--
 Given module `j`'s transitive dependencies, computes the union of `transImps` and the transitive
@@ -574,28 +580,115 @@ run_cmd do
   logInfo m!"{s.transDeps == s'.transDeps}"
 
 /-- `needs` does not need to be transitively closed. -/
-def Needs.coverings (filledRflTransDeps : Array Needs) (needs : Needs) : Array ModuleIdx := Id.run do
+def Needs.coverings (fullTransDeps : Array Needs) (needs : Needs) : Array ModuleIdx := Id.run do
   let mut mods := #[]
   let mut b := false
-  for h : i in 0...filledRflTransDeps.size do
-    if needs.le filledRflTransDeps[i] then
+  for h : i in 0...fullTransDeps.size do
+    if needs.le fullTransDeps[i] then
       -- TODO: be cleverer about this? Can we skip entire attempts?
       -- Or maybe totally different data structure? List, perhaps?
       -- Traversing in one direction or another
       mods := mods.incorporateBelow i fun a b => filledRflTransDeps[a]!.le filledRflTransDeps[b]!
   return mods.reduceOption
 
+instance : SDiff Bitset where
+  sdiff a b := { toNat := a.toNat &&& (a.toNat ^^^ b.toNat) }
+
+instance : SDiff Needs where
+  -- Should this be more "semantic"?
+  sdiff a b := {
+    pub := a.pub \ b.pub
+    priv := a.priv \ b.priv
+    metaPub := a.metaPub \ b.metaPub
+    metaPriv := a.metaPriv \ b.metaPriv
+  }
+
+@[inline] def Needs.map (f : Bitset → Bitset) (n : Needs) : Needs where
+  pub := f n.pub
+  priv := f n.priv
+  metaPub := f n.metaPub
+  metaPriv := f n.metaPriv
+
+@[inline] def Needs.unreflexify (i : Nat) (a : Needs) : Needs :=
+  a.map (· \ {i})
+
+@[inline] def Needs.antilinearize (a : Needs) : Needs :=
+  { a with priv := a.priv \ a.pub, metaPriv := a.metaPriv \ a.metaPub }
+
+/-- `i >[k] _` defines a prearrow. Composes all the applicable arrows in `transDeps` with it.  -/
+-- This is wrong. This says: "import module i at level k". What we want is...look at what module `i` brings in when you import it but not module `i`?
+@[inline] def Needs.mapComposeSingle (transDeps : Array Needs) (i : Nat) (k : NeedsKind) : Needs :=
+  (addTransitiveImps .empty { k with module := .anonymous } i transDeps[i]!).unreflexify i
+
+/--
+Returns an antilinearized `reduced : Needs` such that
+```
+a ≤ reduced.linearize.transitiveClosure transDeps
+```
+and `reduced` is minimal (perhaps non-uniquely) among such `Needs`.
+-/
 def Needs.reduce (a : Needs) (transDeps : Array Needs) : Needs := Id.run do
-  let mut reduced := a
-  let mut covered := Needs.empty
-  for (k, i) in a do -- note: traverses high to low
-  --   reduced := reduced.sub k (transDeps[i]!.get k) -- correct?? or need to reckon with priv/pub?
-  --   -- I suspect this is very wrong and actually we want to subtract `addTransitiveImps`-style.
-  -- return reduced -- does this work???
-    unless covered.covers k i do
-      reduced := reduced.modify k (· ∪ {i})
-    covered := addTransitiveImps covered { k with module := .anonymous } i transDeps[i]!
+  let mut reduced := a.linearize
+  let a := a.antilinearize -- avoids unnecessary checks
+  -- ensure we handle public/private first, since these may reduce meta
+  for k in #[NeedsKind.pub, .priv, .metaPub, .metaPriv] do
+    for i in a.get k do -- note: traverses high to low
+      if reduced.has k i then -- may have been eliminated already
+        reduced := reduced \ (Needs.mapComposeSingle transDeps i k).linearize
+        dbg_trace s!"{reduced.has k i}"
+  return reduced.antilinearize
+
     -- or, could build up a new `reduced` from 0, only adding `i` at `k` if not in the collective `transDeps` built via `addTransitiveImports`?
+elab "#trans_deps" : command => do
+  let { transDeps .. } := initStateFromEnv (← getEnv)
+  let mut isReflexive := #[]
+  let mut composed := #[]
+  for h : i in 0...transDeps.size do
+    if transDeps[i].has .pub i then
+      isReflexive := isReflexive.push i
+    for k in NeedsKind.all do
+      composed := composed.push (i, k, ((Needs.mapComposeSingle transDeps i k).has k i))
+  let env ← getEnv
+  logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
+
+
+def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Needs) : Needs := Id.run do
+  let mut transImps := .empty
+  for i in 0...env.header.imports.size, imp in env.header.imports do
+    dbg_trace s!"{imp}"
+    let i := env.getModuleIdx! imp.module
+    transImps := addTransitiveImps transImps imp i transDeps[i]!
+  return transImps
+
+
+open Elab Command in
+elab "#min_imports" : command => do
+  let { transDeps .. } := initStateFromEnv (← getEnv)
+  let transImps := (← getEnv).transImps transDeps
+  -- logInfo m!"{transImps.toMessageData (← getEnv)}"
+  logInfo m!"{transImps.reduce transDeps |>.toImports (← getEnv) |>.filter
+    fun { module .. } => !(`Init).isPrefixOf module}"
+
+#min_imports
+
+#trans_deps
+open Elab Command in
+elab "#show_imports" ppLine cmd:command : command => do
+  let { transDeps .. } := initStateFromEnv (← getEnv)
+  let needs ← withFreshModRecords do
+    elabCommand cmd
+    recordUsedSyntaxKinds cmd
+    let indirect := getIndirectModUsesState (← getEnv)
+    let (extras, _) := getExtraModUsesState (← getEnv)
+    let decls := cmd.raw.getPos?.get!.getDeclsAfter' (← getEnv) (← getFileMap)
+    let mut needs := .empty
+    let mut declNeeds := {}
+    for decl in decls do
+      (needs, declNeeds) := calcDeclNeeds decl (← getEnv) needs declNeeds
+    pure (needs, declNeeds, indirect, extras)
+  logInfo m!"{needs.1.toMessageData (← getEnv)}{needs.2.2}\n\n\n\
+    {transDeps[3]!.toMessageData (← getEnv)}\n\
+    {needs.1.reduce transDeps |>.toMessageData (← getEnv)}"
 
 
 #show_imports
