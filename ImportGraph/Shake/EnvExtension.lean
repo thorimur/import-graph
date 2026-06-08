@@ -123,9 +123,59 @@ private def Lean.PHashSet.union {α} [BEq α] [Hashable α] (as bs : PHashSet α
       bs := bs.insert a
   return bs
 
+open EnvExtension
+
+-- TODO: not sure if these really can all use `.local`. Seems a bit scary to me.
+
+public def copyExtraModUses' (src dest : Environment)
+    (srcAsyncMode := extraModUsesAsyncMode)
+    (destAsyncMode := extraModUsesAsyncMode) (destAsyncDecl := Name.anonymous) :
+    Environment := Id.run do
+  let mut env := dest
+  for entry in extraModUses.getEntries src srcAsyncMode do
+    if !(extraModUses.getState env destAsyncMode destAsyncDecl).contains entry then
+      env := extraModUses.addEntry env entry destAsyncMode destAsyncDecl
+  env
+
+def copyIndirectModUses (src dest : Environment)
+    (srcAsyncMode := indirectModUseExt.toEnvExtension.asyncMode)
+    (destAsyncMode := indirectModUseExt.toEnvExtension.asyncMode)
+    (destAsyncDecl := Name.anonymous) :
+    Environment := Id.run do
+  let mut dest := dest
+  for i in indirectModUseExt.getEntries src srcAsyncMode do
+    dest := indirectModUseExt.addEntry dest i destAsyncMode destAsyncDecl
+  return dest
+
+def copyExtraRevModUse (src dest : Environment)
+    (srcAsyncMode := isExtraRevModUseExtAsyncMode)
+    (destAsyncMode := isExtraRevModUseExtAsyncMode) (destAsyncDecl := Name.anonymous) :
+    Environment :=
+  if (isExtraRevModUseExt.getEntries src (asyncMode := srcAsyncMode)).isEmpty ||
+    (isExtraRevModUseExt.getEntries src destAsyncMode ).isEmpty
+  then dest else isExtraRevModUseExt.addEntry dest () destAsyncMode destAsyncDecl
+
+-- Note: the asyncmodes of all these extensions are `.sync`.
+@[inline] def copyShakeExts (src dest : Environment)
+    (srcAsyncMode := AsyncMode.sync)
+    (destAsyncMode := AsyncMode.sync)
+    (destAsyncDecl := Name.anonymous) : Environment :=
+  copyExtraModUses' src dest
+    (srcAsyncMode  := srcAsyncMode)
+    (destAsyncMode := destAsyncMode)
+    (destAsyncDecl := destAsyncDecl)
+  |> copyIndirectModUses src
+    (srcAsyncMode  := srcAsyncMode)
+    (destAsyncMode := destAsyncMode)
+    (destAsyncDecl := destAsyncDecl)
+  |> copyExtraRevModUse src
+    (srcAsyncMode  := srcAsyncMode)
+    (destAsyncMode := destAsyncMode)
+    (destAsyncDecl := destAsyncDecl)
+
 -- TODO: could take an approach more like `copyExtraModUses`, possibly even use it. But we don't need to retain the whole environment...
 /-- Resets the shake extensions that record modules, then restores them after running the given action, merging any new records into the new ones. -/
-def withFreshModRecords [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α)
+def withFreshModRecords' [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α)
     (asyncMode : EnvExtension.AsyncMode := .sync)
     (asyncDecl : Name := Name.anonymous) : m α := do
   let indirect := getIndirectModUsesState (← getEnv) asyncMode
@@ -143,3 +193,10 @@ def withFreshModRecords [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α)
         (newExtraEntries.prependWithoutDuplicating extraEntries)
         (newExtraState.union extraState)
       mergeIsExtraRevModUse env isRev asyncMode asyncDecl
+
+/-- Resets the shake extensions that record modules, then restores them after running the given action, merging any new records into the new ones. -/
+def withFreshModRecords [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α) : m α := do
+  let oldEnv ← getEnv
+  try x finally modifyEnv fun newEnv => copyShakeExts newEnv oldEnv
+
+-- TODO: the above is overzealous around recording rev mod uses, I think.
