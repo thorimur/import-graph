@@ -73,96 +73,9 @@ namespace Lake.Shake
 - meet operation on `Needs`. Might need transitive deps after all.
 -/
 
--- /-- Transitively closes a `Needs`. -/
--- def Needs.transitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Needs := Id.run do
---   let mut needs := directNeeds
---   for (k, i) in directNeeds do
---     needs := addTransitiveImps needs { k with module := .anonymous } i transDeps[i]!
---   return needs
-
--- not true
--- def Needs.irreflTransitiveClosure (directNeeds : Needs) (transDeps : Array Needs) : Needs := Id.run do
---   let mut needs := .empty
---   for (k, i) in directNeeds do
---     needs := addTransitiveImps needs { k with module := .anonymous } i transDeps[i]!
---   return needs
-
-  -- or:
-  -- let mut needs := directNeeds
-  -- for h : i in 0...transDeps.size do
-  --   for k in NeedsKind.all do
-  --     if directNeeds.has k i then
-  --       needs := addTransitiveImps needs { k with module := .anonymous } i transDeps[i]
-  -- return needs
 
 
 
--- /-- Assumes the second argument is already transitively closed (not necessarily the first), and also has b.(meta)pub ≤ b.(meta)priv. `false` includes incomparable. -/
--- @[inline] def Needs.le (a b : Needs) : Bool :=
---   -- NeedsKind.all.all fun k => a.get k |>.le b.get k
---   a.pub.le b.pub
---     && a.priv.le b.priv
---     && a.metaPub.le b.metaPub
---     && a.metaPriv.le b.metaPriv
-
--- theorem le_eq_all_get_le_get (a b : Needs) :
---     a.le b = NeedsKind.all.all fun k => a.get k |>.le <| b.get k := by
---   simp [NeedsKind.all, Needs.get, Needs.le, Bool.and_assoc]
-
--- /-- Linearizes and reflexifies. Note that
--- ```
--- a.transitiveClosure transDeps |>.fill = a.fill.transitiveClosure transDeps
--- ```
--- -/
--- @[inline] def Needs.fill (i : Nat) (a : Needs) : Needs := a.linearize.reflexify i
-
-
--- @[inline] def _root_.Array.incorporateBelow (as : Array (Option α)) (a : α)
---     (le : α → α → Bool) : Array (Option α) := Id.run do
---   let mut as := as
---   for i in 0...as.size do
---     let some aᵢ := as[i]! | continue
---     if le a aᵢ then
---       as := as.set! i none
---     else if le aᵢ a then
---       return as
---   return as.push a
-
--- TODO: we need composition here. Both of generators/imports and `>`.
-
-/-- `needs` does not need to be transitively closed. -/
-def Needs.coverings (fullTransDeps : Array Needs) (needs : Needs) : Array ModuleIdx := Id.run do
-  let mut mods := #[]
-  let mut b := false
-  for h : i in 0...fullTransDeps.size do
-    if needs.le fullTransDeps[i] then
-      -- TODO: be cleverer about this? Can we skip entire attempts?
-      -- Or maybe totally different data structure? List, perhaps?
-      -- Traversing in one direction or another
-      mods := mods.incorporateBelow i fun a b => filledRflTransDeps[a]!.le filledRflTransDeps[b]!
-  return mods.reduceOption
-
-instance : SDiff Bitset where
-  sdiff a b := { toNat := a.toNat &&& (a.toNat ^^^ b.toNat) }
-
-instance : SDiff Needs where
-  -- Should this be more "semantic"?
-  sdiff a b := {
-    pub := a.pub \ b.pub
-    priv := a.priv \ b.priv
-    metaPub := a.metaPub \ b.metaPub
-    metaPriv := a.metaPriv \ b.metaPriv
-  }
-
--- @[inline] def Needs.map (f : Bitset → Bitset) (n : Needs) : Needs where
---   pub := f n.pub
---   priv := f n.priv
---   metaPub := f n.metaPub
---   metaPriv := f n.metaPriv
-
-
-
-    -- or, could build up a new `reduced` from 0, only adding `i` at `k` if not in the collective `transDeps` built via `addTransitiveImports`?
 elab "#trans_deps" : command => do
   let { transDeps .. } := initStateFromEnv (← getEnv)
   let mut isReflexive := #[]
@@ -175,7 +88,6 @@ elab "#trans_deps" : command => do
   let env ← getEnv
   logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
 
-
 def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Needs) : Needs := Id.run do
   let mut transImps := .empty
   for imp in env.header.imports do
@@ -183,7 +95,7 @@ def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Nee
     transImps := addTransitiveImps transImps imp i transDeps[i]!
   return transImps
 
-
+-- TODO: `#min_imports!` needs to consider extraRevModUse. So does
 
 open Elab Command in
 elab "#min_imports" : command => do
@@ -205,11 +117,54 @@ elab "#min_imports" : command => do
   -- logInfo m!"{transImps.toMessageData (← getEnv)}"
   logInfo m!"{newImports}"
 
+def addCurrentExtraModUses (env : Environment) (needs : Needs) : Needs := Id.run do
+  let mut needs := needs
+  for use in getExtraModUsesState env |>.1 do
+    needs := needs.union { use with } {env.getModuleIdx! use.module}
+  return needs
+
+
+open Elab Command
+/-- Note: does **not** capture extra rev mod uses influencing the file as a whole. -/
+def withElabCommandCapturingNeeds (cmd : Syntax.Command)
+    (f : Needs → DeclNeeds → CommandElabM β) : CommandElabM β := do
+  withFreshModRecords do
+    let oldEnv ← getEnv
+    elabCommand cmd
+    recordUsedSyntaxKinds cmd
+    let decls := cmd.raw.getPos?.get!.getDeclsAfter' (← getEnv) (← getFileMap)
+    let mut needs := .empty
+    let mut declNeeds := {}
+    for decl in decls do
+      (needs, declNeeds) := calcDeclNeeds decl (← getEnv) needs declNeeds
+    let env ← getEnv
+    -- Not great tbh.
+    (needs, declNeeds) := env.constants.foldStage2 (s := (needs, declNeeds))
+      fun acc@(needs, declNeeds) decl _ =>
+        if oldEnv.contains decl then acc else calcDeclNeeds decl env needs declNeeds
+    needs := addCurrentExtraModUses env needs
+    f needs declNeeds
+
+def
+
+def addExtraRevModUses (env : Environment) (needs : Needs) : Needs := Id.run do
+  let mut needs := needs
+  for entry in isExtraRevModUseExt.toEnvExtension.getState env |>.importedEntries do
+    unless entry.isEmpty do
+      needs := -- need to union it with the way the modules is imported now
+
+
+
+
 -- One version that does this; another version that minimizes it on your actual file, with some hackery perhaps to ensure it's at the end.
 -- Ideally a widget with a promise that gets filled in by a linter at the end?
 -- Or not a promise, because that might not be editable. Just a ref that gets updated, maybe? Plus a ringing of a bell to update the widget...
 #min_imports
 -- Also, try-this for replacing imports and such. Should `#min_imports` just be a lightbulb?
+
+
+
+def elabCommandCapturingDeps
 
 #trans_deps
 open Elab Command in
