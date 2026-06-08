@@ -115,6 +115,15 @@ def Needs.fillTransDeps (transDeps : Array Needs) : Array Needs :=
   /- Note that `.linearize` commutes with `.reflexify`. -/
   transDeps.mapIdx fun i n => n.linearize.reflexify i
 
+/-- Checks if the arrows `j ⟦m, p⟫ i` are covered by `transDeps`, after filling (linearizing and reflexifying). Does not assume `transDeps` are filled. -/
+def Needs.coveredBy (needs : Needs) (i : Nat) (transDeps : Array Needs) : Bool :=
+  /- Note that `.linearize` commutes with `.reflexify`. -/
+  needs.directLe <| transDeps[i]!.linearize.reflexify i
+
+/-- Checks if the prearrows `j ⟦m, p⟫ ·` in `n₁` are included in the arrows provided by the transitive closure of `n₂` with respect to the import hierarchy. Linearizes `n₂`, and therefore the transitive closure we're comparing against. -/
+def Needs.subsumedBy (n₁ n₂ : Needs) (transDeps : Array Needs) : Bool :=
+  n₁.directLe <| n₂.linearize.transitiveClosure transDeps
+
 /--
 Returns an antilinearized `reduced : Needs` such that
 ```
@@ -131,3 +140,36 @@ def Needs.reduce (a : Needs) (transDeps : Array Needs) : Needs := Id.run do
       if reduced.has k i then -- may have been eliminated already
         reduced := reduced \ (k.postcompose transDeps[i]!).linearize
   return reduced.antilinearize
+
+/-- Attempts to insert `a` among the set `as` of minimal elements as a new minimal element according to `lt`. Clears elements of `as` that are above `a`, and ignores `a` if we already have an element lower than `a`.  -/
+@[inline] private def _root_.Array.incorporateBelow (as : Array (Option α)) (a : α)
+    (lt : α → α → Bool) : Array (Option α) := Id.run do
+  let mut as := as
+  for i in 0...as.size do
+    let some aᵢ := as[i]! | continue
+    if lt a aᵢ then
+      -- Erase elements of `as` that are (strictly) above `a`
+      as := as.set! i none
+    else if lt aᵢ a then
+      -- If `a` is strictly below anything, we don't need it
+      return as
+  return as.push a
+
+/-- Finds the modules `i` that provide `needs` according to `transDeps` (including `i`'s public and
+private scopes), and are lowest in the hierarchy according to `prevs`. `needs` does not need to be
+transitively closed, nor does `transDeps` need to be filled. -/
+def Needs.coverings (transDeps : Array Needs) (prevs : Array Bitset) (needs : Needs) :
+    Array ModuleIdx := Id.run do
+  let mut mods := #[]
+  for i in 0...transDeps.size do
+    if needs.coveredBy i transDeps then
+      -- TODO: be cleverer about this? Can we skip entire attempts?
+      -- Or maybe totally different data structure? List, perhaps?
+      -- Traversing in one direction or another
+      mods := mods.incorporateBelow i fun i j => prevs[i]!.lt prevs[j]!
+  return mods.reduceOption
+
+def sortByDepthThenSize (mods : Array ModuleIdx) (depths : Array Nat) (prevs : Array Bitset) :
+    Array ModuleIdx :=
+  mods.qsort fun i j =>
+    (compare depths[i]! depths[j]! |>.then <| compare prevs[i]!.size prevs[j]!.size).isLT
