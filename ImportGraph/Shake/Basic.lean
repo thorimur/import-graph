@@ -4,6 +4,14 @@ import all Lake.CLI.Shake
 
 open Lean Lake.Shake
 
+def Nat.numSetBits (n : Nat) : Nat := Id.run do
+  let mut n := n
+  let mut acc := 0
+  while n != 0 do
+    n := n &&& (n - 1) -- clears the lowest set bit
+    acc := acc + 1
+  return acc
+
 namespace Lake.Shake
 
 /-!
@@ -13,6 +21,8 @@ Note: this module must be imported via `import all`.
 -- TODO: document
 
 section bitset
+
+@[inline] def Bitset.size (s : Bitset) : Nat := s.toNat.numSetBits
 
 @[specialize f]
 def Bitset.foldOneIdxs (s : Bitset) (init : α) (f : α → Nat → α) : α := Id.run do
@@ -31,6 +41,7 @@ def Bitset.foldOneIdxs (s : Bitset) (init : α) (f : α → Nat → α) : α := 
 @[inline] def Bitset.isEmpty (s : Bitset) : Bool := s.toNat == 0
 -- TODO: notation? use `∩`?
 @[inline] def Bitset.le (a b : Bitset) : Bool := a.toNat &&& b.toNat == a.toNat
+@[inline] def Bitset.lt (a b : Bitset) : Bool := a.le b && a != b
 
 instance : SDiff Bitset where
   sdiff a b := { toNat := a.toNat &&& (a.toNat ^^^ b.toNat) }
@@ -78,11 +89,20 @@ def Needs.single (k : NeedsKind) (i : Nat) : Needs := Needs.empty.set k {i}
 
 @[inline] def Needs.onAll (n : Needs) (via : Array NeedsKind → (NeedsKind → β) → α)
     (f : Bitset → β) : α := via NeedsKind.all (f <| n.get ·)
+@[inline] def Needs.onAllWithKind (n : Needs) (via : Array NeedsKind → (NeedsKind → β) → α)
+    (f : NeedsKind → Bitset → β) : α := via NeedsKind.all fun k => f k <| n.get k
 
-def Needs.any (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.any) f
-def Needs.all (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.all) f
+@[inline] def Needs.any (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.any) f
+@[inline] def Needs.all (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.all) f
 @[inline] def Needs.fold (n : Needs) (f : Bitset → α → α) (init : α) : α :=
   n.onAll (·.foldr (init := init)) f
+
+@[inline] def Needs.anyWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
+  n.onAllWithKind (·.any) f
+@[inline] def Needs.allWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
+  n.onAllWithKind (·.all) f
+@[inline] def Needs.foldWithKind (n : Needs) (f : NeedsKind → Bitset → α → α) (init : α) : α :=
+  n.onAllWithKind (·.foldr (init := init)) f
 
 @[specialize f] def Needs.map (n : Needs) (f : Bitset → Bitset) : Needs where
   pub := f n.pub
@@ -90,11 +110,24 @@ def Needs.all (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.all) f
   metaPub := f n.metaPub
   metaPriv := f n.metaPriv
 
+@[specialize f] def Needs.mapWithKind (n : Needs) (f : NeedsKind → Bitset → Bitset) : Needs where
+  pub := f .pub n.pub
+  priv := f .priv n.priv
+  metaPub := f .metaPub n.metaPub
+  metaPriv := f .metaPriv n.metaPriv
+
 @[specialize f] def Needs.map₂ (n₁ n₂ : Needs) (f : Bitset → Bitset → Bitset) : Needs where
   pub := f n₁.pub n₂.pub
   priv := f n₁.priv n₂.priv
   metaPub := f n₁.metaPub n₂.metaPub
   metaPriv := f n₁.metaPriv n₂.metaPriv
+
+@[specialize f] def Needs.mapWithKind₂ (n₁ n₂ : Needs)
+    (f : NeedsKind → Bitset → Bitset → Bitset) : Needs where
+  pub := f .pub n₁.pub n₂.pub
+  priv := f .priv n₁.priv n₂.priv
+  metaPub := f .metaPub n₁.metaPub n₂.metaPub
+  metaPriv := f .metaPriv n₁.metaPriv n₂.metaPriv
 
 @[inline] def Needs.isEmpty (n : Needs) : Bool := n.all (·.isEmpty)
 @[inline] def Needs.isEmptyAt (k : NeedsKind) (n : Needs) : Bool := n.get k |>.isEmpty
@@ -118,3 +151,17 @@ instance : ToMessageData NeedsKind where
     | .metaPub => "public meta"
     | .priv => "private"
     | .metaPriv => "private meta"
+/- Note: we run this a lot, so implement it directly and ensure it stays up-to-date with
+`NeedsKind.all` via proof. -/
+
+/-- Whether each field of the first `Needs` is contained within the corresponding field of the second. Use with caution: this does not necessarily indicate that one `Needs` subsumes another. See also `Needs.coveredBy` for testing against an import hierarchy. -/
+def Needs.directLe (n m : Needs) : Bool :=
+  n.pub.le m.pub &&
+  n.priv.le m.priv &&
+  n.metaPub.le m.metaPub &&
+  n.metaPriv.le m.metaPriv
+
+private def Needs.directLe' (n m : Needs) : Bool := n.allWithKind fun k set => set.le <| m.get k
+
+theorem Needs.directLe_eq_directLe' : Needs.directLe = Needs.directLe' := by
+  ext; simp [directLe, directLe', allWithKind, onAllWithKind, NeedsKind.all, get, Bool.and_assoc]
