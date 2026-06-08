@@ -29,10 +29,8 @@ def Bitset.foldOneIdxs (s : Bitset) (init : α) (f : α → Nat → α) : α := 
 @[inline] def Bitset.highestIdx? (s : Bitset) : Option Nat :=
   if s.toNat != 0 then s.toNat.log2 else none
 @[inline] def Bitset.isEmpty (s : Bitset) : Bool := s.toNat == 0
+-- TODO: notation? use `∩`?
 @[inline] def Bitset.le (a b : Bitset) : Bool := a.toNat &&& b.toNat == a.toNat
-
-instance : Inter Bitset where
-  inter a b := { toNat := a.toNat &&& b.toNat }
 
 instance : SDiff Bitset where
   sdiff a b := { toNat := a.toNat &&& (a.toNat ^^^ b.toNat) }
@@ -57,6 +55,8 @@ end bitset
 
 section needs
 
+deriving instance BEq for Needs
+
 @[specialize f]
 protected def Needs.forIn {m} [Monad m] {β : Type} (s : Needs) (init : β)
     (f : (NeedsKind × Nat) → β → m (ForInStep β)) : m β := do
@@ -74,19 +74,14 @@ protected def Needs.forIn {m} [Monad m] {β : Type} (s : Needs) (init : β)
 instance {m} [Monad m] : ForIn m Needs (NeedsKind × Nat) where
   forIn := Needs.forIn
 
+def Needs.single (k : NeedsKind) (i : Nat) : Needs := Needs.empty.set k {i}
+
 @[inline] def Needs.onAll (n : Needs) (via : Array NeedsKind → (NeedsKind → β) → α)
     (f : Bitset → β) : α := via NeedsKind.all (f <| n.get ·)
 
-def Needs.modify (k : NeedsKind) (n : Needs) (f : Bitset → Bitset) : Needs :=
-  match k with
-  | .pub => { n with pub := f n.pub }
-  | .priv => { n with priv := f n.priv }
-  | .metaPub => { n with metaPub := f n.metaPub }
-  | .metaPriv => { n with metaPriv := f n.metaPriv }
-
 def Needs.any (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.any) f
 def Needs.all (n : Needs) (f : Bitset → Bool) : Bool := n.onAll (·.all) f
-@[specialize f] def Needs.fold (n : Needs) (f : Bitset → α → α) (init : α) : α :=
+@[inline] def Needs.fold (n : Needs) (f : Bitset → α → α) (init : α) : α :=
   n.onAll (·.foldr (init := init)) f
 
 @[specialize f] def Needs.map (n : Needs) (f : Bitset → Bitset) : Needs where
@@ -114,10 +109,8 @@ def Needs.toImports (env : Environment) (n : Needs) : Array Import := Id.run do
       importAll := false }
   return out
 
--- TODO: not convinced this is "correct" as API
--- instance : SDiff Needs where
---   -- Should this be more "semantic"?
---   sdiff a b := a.map₂ b (· \ ·)
+instance : SDiff Needs where
+  sdiff a b := a.map₂ b (· \ ·)
 
 instance : ToMessageData NeedsKind where
   toMessageData

@@ -19,7 +19,8 @@ public def Environment.getModuleFor? (env : Environment) (declName : Name) : Opt
       none
   | some idx => env.header.moduleNames[idx.toNat]!
 
-@[inline] def Environment.getModuleIdx! (env : Environment) (moduleName : Name) : ModuleIdx :=
+@[inline]
+public def Environment.getModuleIdx! (env : Environment) (moduleName : Name) : ModuleIdx :=
   env.getModuleIdx? moduleName |>.get!
 
 end Lean
