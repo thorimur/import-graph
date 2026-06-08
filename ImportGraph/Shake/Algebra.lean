@@ -8,7 +8,7 @@ namespace Lean
 
 /-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), add to `composed` the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible. -/
 def Import.addPostcompose (composed : Needs) (imp : Import) (impTransDeps : Needs) :
-    Needs :=Id.run do
+    Needs := Id.run do
   let mut composed := composed
   -- `⟦m, 1⟫[m', p⟩  ⇒  ⟦m ∨ m', p⟫`
   for k' in #[NeedsKind.pub, .metaPub] do -- `∀ (m, 1)`
@@ -26,13 +26,23 @@ def Import.addPostcompose (composed : Needs) (imp : Import) (impTransDeps : Need
   imp.addPostcompose .empty impTransDeps
 
 /-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
-@[inline] def Import.transitiveClosure (i : Nat) (imp : Import) (transDeps : Array Needs) : Needs :=
+@[inline] def Import.transitiveClosureSingle (i : Nat) (imp : Import) (transDeps : Array Needs) :
+    Needs :=
   imp.addPostcompose (.single { imp with } i) transDeps[i]!
 
 /-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, adds to `n` the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
 @[inline] def Import.addTransitiveClosure (n : Needs) (i : Nat) (imp : Import)
     (transDeps : Array Needs) : Needs :=
   imp.addPostcompose (n.union { imp with } {i}) transDeps[i]!
+
+def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
+    (imps : Array Import) (transDeps : Array Needs) : Needs :=
+  imps.foldl (init := .empty) fun needs imp =>
+    imp.addTransitiveClosure needs (env.getModuleIdx? imp.module |>.get!) transDeps
+
+@[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
+    Needs :=
+  env.transitiveClosureOf env.header.imports transDeps
 
 end Lean
 
