@@ -35,15 +35,6 @@ def Import.addPostcompose (composed : Needs) (imp : Import) (impTransDeps : Need
     (transDeps : Array Needs) : Needs :=
   imp.addPostcompose (n.union { imp with } {i}) transDeps[i]!
 
-def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
-    (imps : Array Import) (transDeps : Array Needs) : Needs :=
-  imps.foldl (init := .empty) fun needs imp =>
-    imp.addTransitiveClosure needs (env.getModuleIdx? imp.module |>.get!) transDeps
-
-@[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
-    Needs :=
-  env.transitiveClosureOf env.header.imports transDeps
-
 end Lean
 
 namespace Lake.Shake
