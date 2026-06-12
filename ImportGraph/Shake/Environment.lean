@@ -9,7 +9,7 @@ open Lean Lake Shake
 def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
     (imps : Array Import) (transDeps : Array Needs) (base : Needs := .empty): Needs :=
   imps.foldl (init := base) fun needs imp =>
-    imp.addTransitiveClosure needs (env.getModuleIdx! imp.module) transDeps
+    imp.addTransitiveClosureSingle needs (env.getModuleIdx! imp.module) transDeps
 
 @[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
     Needs :=
