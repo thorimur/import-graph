@@ -131,6 +131,8 @@ Returns an antilinearized `reduced : Needs` such that
 a ≤ reduced.linearize.transitiveClosure transDeps
 ```
 and `reduced` is minimal (perhaps non-uniquely) among such `Needs`.
+
+Does not assume any linearization of `transDeps` or `a`.
 -/
 def Needs.reduce (a : Needs) (transDeps : Array Needs) : Needs := Id.run do
   let mut reduced := a.linearize
