@@ -5,16 +5,48 @@ import ImportGraph.Lean.Environment
 
 open Lean Lake Shake
 
+/-- Computes the transitive closure of a set of imports with respect to an import hierarchy `transDeps`. -/
 def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
-    (imps : Array Import) (transDeps : Array Needs) : Needs :=
-  imps.foldl (init := .empty) fun needs imp =>
+    (imps : Array Import) (transDeps : Array Needs) (base : Needs := .empty): Needs :=
+  imps.foldl (init := base) fun needs imp =>
     imp.addTransitiveClosure needs (env.getModuleIdx! imp.module) transDeps
 
 @[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
     Needs :=
   env.transitiveClosureOf env.header.imports transDeps
 
--- TODO: Okay, I need a way to chain all these things
+/-
+def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Needs) : Needs := Id.run do
+  let mut transImps := .empty
+  for imp in env.header.imports do
+    let i := env.getModuleIdx! imp.module
+    transImps := addTransitiveImps transImps imp i transDeps[i]!
+  return transImps
+-/
+
+def _root_.Lean.Environment.currentExtraRevUses (env : Environment) : Bitset := Id.run do
+  let mut s := {}
+  for idx in 0...env.header.moduleData.size do
+    if isExtraRevModUse env idx then
+      s := s ∪ {idx}
+  return s
+
+def setAtNeeds (s : Bitset) (transNeeds : Needs) := transNeeds.map (· ∩ s)
+
+/-- Not transitively closed. -/
+def _root_.Lean.Environment.currentExtraRevNeeds (env : Environment) (transNeeds : Needs)
+    (base : Needs := .empty) : Needs := Id.run do
+  let mut needs := base
+  for idx in 0...env.header.moduleData.size do
+    if isExtraRevModUse env idx then
+      for k in NeedsKind.all do
+        if transNeeds.has k idx then
+          needs := needs.union k {idx}
+  return needs
+
+
+-- TODO: Okay, I need a way to chain all these things conveniently
+
 
 partial def Lean.Environment.mkTransDeps (env : Environment) : Array Needs := Id.run do
   let mut transDeps := Array.mkEmpty env.header.moduleData.size
