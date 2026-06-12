@@ -228,11 +228,13 @@ def collectWithWhitespaceFromSource (imps : Array Import)
     impsWithWs := impsWithWs.push (imp, { leading := totalLeading, trailing })
   return (impsWithWs, allErrors)
 
+-- TODO: group annotations instead of
 instance : ToFormat Import.FormatError where
   format
     | .multipleTrailing imp refsWithTrailing => Id.run do
-      let annotations := f!"\n".joinSep (refsWithTrailing.map (f!"  {·.2}")).toList
-      f!"Multiple annotations were given for `{imp}`:\n{annotations}"
+      let annotations := f!"\n".joinSep (refsWithTrailing.map fun (ref, trailing) =>
+        f!"{ref.toImport}{trailing}").toList
+      f!"Multiple annotations were given for `{imp}`:\n```\n{annotations}\n```"
     | .reviewTrailing imp refsWithTrailing => Id.run do
       let mut msg := f!"Annotations were present when importing `{imp.module}`, but this module is \
         now imported differently as `{imp}`. Decide if the following original annotations still \
@@ -378,6 +380,8 @@ public import Foo.Bar -- shake: milk
 -- Comment 1
 -- comment2
 import Baz.Baz -- other
+
+import Baz.Baz -- other₂
 
 -- aAAAAAA
 import Qq
