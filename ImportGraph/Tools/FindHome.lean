@@ -20,6 +20,7 @@ import all ImportGraph.Shake.Algebra
 import all ImportGraph.Shake.DeclNeeds
 import all ImportGraph.Shake.EnvExtension
 import all ImportGraph.Shake.Precedes
+import all ImportGraph.Shake.Environment
 
 
 open Lean Lake Shake
@@ -73,6 +74,7 @@ namespace Lake.Shake
 - meet operation on `Needs`. Might need transitive deps after all.
 -/
 
+-- To get the current
 
 
 
@@ -88,12 +90,7 @@ elab "#trans_deps" : command => do
   let env ← getEnv
   logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
 
-def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Needs) : Needs := Id.run do
-  let mut transImps := .empty
-  for imp in env.header.imports do
-    let i := env.getModuleIdx! imp.module
-    transImps := addTransitiveImps transImps imp i transDeps[i]!
-  return transImps
+
 
 -- TODO: `#min_imports!` needs to consider extraRevModUse. So does
 
