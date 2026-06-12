@@ -102,3 +102,33 @@ partial def Lean.Environment.mkPreviousWithDepths (env : Environment)
     prevs := prevs.push prev
     depths := depths.push depth
   return (prevs, depths)
+
+protected structure ImportGraph.State extends Lake.Shake.State where
+  prevs : Array Bitset := #[]
+  depths : Array Nat := #[]
+
+protected partial def ImportGraph.initStateFromEnv (env : Environment) : ImportGraph.State :=
+    Id.run do
+  let mut s := {
+    env
+    transDeps := Array.mkEmpty env.header.moduleData.size
+    prevs := Array.mkEmpty env.header.moduleData.size
+    depths := Array.mkEmpty env.header.moduleData.size }
+  for i in 0...env.header.moduleData.size do
+    let mod := env.header.moduleData[i]!
+    -- let mut imps := #[]
+    let mut prev := {}
+    let mut depth := 0
+    let mut transImps := Needs.empty
+    for imp in mod.imports do
+      let j := env.getModuleIdx? imp.module |>.get!
+      -- imps := imps.push j
+      transImps := addTransitiveImps transImps imp j s.transDeps[j]!
+      prev := prev ∪ {j} ∪ s.prevs[j]!
+      depth := max depth (s.depths[j]! + 1)
+    s := { s with
+      transDeps := s.transDeps.push transImps
+      prevs := s.prevs.push prev
+      depths := s.depths.push depth }
+  s := { s with transDepsOrig := s.transDeps }
+  return s
