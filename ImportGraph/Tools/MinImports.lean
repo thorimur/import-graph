@@ -9,6 +9,10 @@ public meta import Lean.Elab.Command
 public meta import Lean.Widget.UserWidget
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Imports.Redundant
+public meta import ImportGraph.Shake.Environment
+public meta import ImportGraph.Shake.Algebra
+public meta import ImportGraph.Shake.Basic
+import all ImportGraph.Shake.Environment
 
 public meta section
 
@@ -26,18 +30,25 @@ def Lean.Environment.minimalRequiredModules (env : Environment) : Array Name :=
   let redundant := findRedundantImports env required
   required.filter fun n => ¬ redundant.contains n
 
-/--
-Try to compute a minimal set of imports for this file,
-by analyzing the declarations.
-
-This must be run at the end of the file,
-and is not aware of syntax and tactics,
-so the results will likely need to be adjusted by hand.
--/
 elab "#min_imports" : command => do
-  let imports := (← getEnv).minimalRequiredModules.qsort (·.toString < ·.toString)
-    |>.toList.map (fun n => "public import " ++ n.toString)
-  logInfo <| Format.joinSep imports "\n"
+  let transDeps := (← getEnv).mkTransDeps
+  let transNeeds := (← getEnv).transNeeds transDeps
+  let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+
+
+
+-- /--
+-- Try to compute a minimal set of imports for this file,
+-- by analyzing the declarations.
+
+-- This must be run at the end of the file,
+-- and is not aware of syntax and tactics,
+-- so the results will likely need to be adjusted by hand.
+-- -/
+-- elab "#min_imports" : command => do
+--   let imports := (← getEnv).minimalRequiredModules.qsort (·.toString < ·.toString)
+--     |>.toList.map (fun n => "public import " ++ n.toString)
+--   logInfo <| Format.joinSep imports "\n"
 
 -- deprecated since 2024-07-06
 elab "#minimize_imports" : command => do
