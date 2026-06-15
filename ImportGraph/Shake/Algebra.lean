@@ -45,22 +45,22 @@ scoped instance : Shake.HPostcomp Needs Import Needs where
     (transDeps : Hierarchy) : Needs :=
   imp.addPostcompose (.single { imp with } i) transDeps[i]!
 
-scoped instance : Shake.HTransClosure (ModuleIdx × Import) Hierarchy Needs where
-  htransClosure := fun (i, imp) transDeps => imp.transitiveClosureSingle i transDeps
+scoped instance : Shake.HTransClosure Hierarchy (ModuleIdx × Import) Needs where
+  htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps
 
-/-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, adds to `n` the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
-@[inline] def _root_.Lean.Import.addTransitiveClosureSingle (n : Needs) (i : Nat) (imp : Import)
-    (transDeps : Hierarchy) : Needs :=
-  imp.addPostcompose (n.union { imp with } {i}) transDeps[i]!
+-- /-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, adds to `n` the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
+-- @[inline] def _root_.Lean.Import.addTransitiveClosureSingle (n : Needs) (i : Nat) (imp : Import)
+--     (transDeps : Hierarchy) : Needs :=
+--   imp.addPostcompose (Needs.empty.union { imp with } {i}) transDeps[i]!
 
 /-- Given an abstract `NeedsKind` `⟦m, p⟫` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), forms the composed prearrows `j ⟦m',p'⟫⟦m,p⟫ ·` where composition is possible. -/
 def _root_.Lake.Shake.NeedsKind.postcompose (n : Needs) (k : NeedsKind) : Needs := Id.run do
   let mut composed := .empty
   -- `⟦m, 1⟫⟦m', p⟫  ⇒  ⟦m ∨ m', p⟫`
-  for k' in #[NeedsKind.pub, .metaPub] do -- ∀ (m, 1)
+  for m in #[NeedsKind.pub, .metaPub] do -- ∀ (m, 1)
     composed := composed.union
-      { isMeta := k'.isMeta || k.isMeta, isExported := k.isExported }
-      (n.get k') -- `j ⟦m, 1⟫ ·`
+      { isMeta := m.isMeta || k.isMeta, isExported := k.isExported }
+      (n.get m) -- `j ⟦m, 1⟫ ·`
   composed
 
 scoped instance : Shake.HPostcomp Needs NeedsKind Needs where
