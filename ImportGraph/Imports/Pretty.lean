@@ -121,7 +121,7 @@ but that's only a problem in non-modules, which we don't handle anyway yet.
 
 We also don't account for trailing comments on lines after the line of the final import.
 -/
-private def headerToImportRefsWithWhitespace (header : TSyntax ``Parser.Module.header) :
+def _root_.ImportGraph.headerToImportRefsWithWhitespace (header : TSyntax ``Parser.Module.header) :
     Array (ImportRef × Whitespace) :=
   let imps := headerToImportRefs header.updateLeadingPreservingStart
   imps.map fun imp =>
@@ -304,7 +304,7 @@ def prettyWithWhitespace (imps : Array (Import × Whitespace))
   let (impsFmt, errComment?) := prettyWithWhitespaceFromSource imps sourceImps fmtBehavior
   if let some errComment := errComment? then f!"{impsFmt}\n\n/-\n{errComment}\n-/" else impsFmt
 
-
+/-
 section silly
 
 open Lean Elab Command
@@ -347,7 +347,7 @@ def showWhitespace : Linter where
     match cmd with
     | `(command| #test $header₁ #then $header₂) => do
       let imps₁ := headerToImportRefs header₁ |>.map (·.toImport)
-      let imps₂ := headerToImportRefsWithWhitespace header₂
+      let imps₂ := ImportGraph.headerToImportRefsWithWhitespace header₂
       logInfo m!"{imps₂.map (·.1.module)}"
       logInfo m!"{prettyWithWhitespaceFromSourceAndErrorComment imps₁ imps₂}"
     | _ => pure ()
@@ -395,3 +395,4 @@ import G
 example : True := trivial
 
 end silly
+-/
