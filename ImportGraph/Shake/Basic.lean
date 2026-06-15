@@ -132,11 +132,15 @@ def Needs.single (k : NeedsKind) (i : Nat) : Needs := Needs.empty.set k {i}
 @[inline] def Needs.isEmpty (n : Needs) : Bool := n.all (·.isEmpty)
 @[inline] def Needs.isEmptyAt (k : NeedsKind) (n : Needs) : Bool := n.get k |>.isEmpty
 
-def Needs.toImports (env : Environment) (n : Needs) : Array Import := Id.run do
+def Needs.toImports (env : Environment) (n : Needs) (skipInit := true) : Array Import := Id.run do
   let mut out := #[]
   for (k, i) in n do
+    let some module := env.allImportedModuleNames[i]?
+      | dbg_trace "yikes! ({i})"
+        continue
+    if skipInit && (`Init).isPrefixOf module then continue
     out := out.push {
-      module := env.allImportedModuleNames[i]!
+      module
       isExported := k.isExported
       isMeta := k.isMeta
       importAll := false }

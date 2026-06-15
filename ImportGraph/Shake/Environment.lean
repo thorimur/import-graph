@@ -3,13 +3,13 @@ module
 import all ImportGraph.Shake.Algebra
 import ImportGraph.Lean.Environment
 
-open Lean Lake Shake
+open Lean Lake ImportGraph Shake
 
 /-- Computes the transitive closure of a set of imports with respect to an import hierarchy `transDeps`. -/
 def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
-    (imps : Array Import) (transDeps : Array Needs) (base : Needs := .empty): Needs :=
+    (imps : Array Import) (transDeps : Hierarchy) (base : Needs := .empty): Needs :=
   imps.foldl (init := base) fun needs imp =>
-    imp.addTransitiveClosureSingle needs (env.getModuleIdx! imp.module) transDeps
+    needs ∪ (transDeps⟦(env.getModuleIdx! imp.module, imp)⟧)
 
 @[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
     Needs :=
@@ -51,11 +51,18 @@ def _root_.Lean.Environment.currentExtraRevNeeds (env : Environment) (transNeeds
 partial def Lean.Environment.mkTransDeps (env : Environment) : Array Needs := Id.run do
   let mut transDeps := Array.mkEmpty env.header.moduleData.size
   for i in 0...env.header.moduleData.size do
-    let mod := env.header.moduleData[i]!
+    let some mod := env.header.moduleData[i]?
+      | dbg_trace "yiiikes! {i}"
+        continue
     let mut transImps := Needs.empty
     for imp in mod.imports do
-      let j := env.getModuleIdx! imp.module
-      transImps := addTransitiveImps transImps imp j transDeps[j]!
+      let some j := env.getModuleIdx? imp.module
+        | dbg_trace "yiiikes! (2) i := {i}; imp := ({imp});"
+          continue
+      let some transDepsj := transDeps[j]?
+        | dbg_trace "yiiikes! (3) transDeps.size := {transDeps.size}; j := {j}; imp := ({imp}); i := {i}{if transDeps.size + 1 == j then s!"\n{env.header.moduleData[(0 : Nat)...(j : Nat)].toArray.mapIdx fun idx i => s!"{env.allImportedModuleNames[idx]!} with {i.imports}\n"}" else ""}"
+          continue
+      transImps := addTransitiveImps transImps imp j transDepsj
     transDeps := transDeps.push transImps
   return transDeps
 

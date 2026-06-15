@@ -12,7 +12,9 @@ public meta import ImportGraph.Imports.Redundant
 public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Shake.Algebra
 public meta import ImportGraph.Shake.Basic
+public meta import ImportGraph.Imports.Pretty
 import all ImportGraph.Shake.Environment
+import Lean
 
 public meta section
 
@@ -30,11 +32,47 @@ def Lean.Environment.minimalRequiredModules (env : Environment) : Array Name :=
   let redundant := findRedundantImports env required
   required.filter fun n => ¬ redundant.contains n
 
+def ImportGraph.parseCurrentHeader {m} [Monad m] [MonadLog m] [MonadLiftT IO m] :
+    m (TSyntax `Lean.Parser.Module.header × Parser.ModuleParserState × MessageLog) := do
+  Parser.parseHeader (Parser.mkInputContext (← getFileMap).source (← getFileName))
+
+open ImportGraph
+
 elab "#min_imports" : command => do
   let transDeps := (← getEnv).mkTransDeps
   let transNeeds := (← getEnv).transNeeds transDeps
-  let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+  -- let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+  -- let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
+  -- let (header, _, log) ← parseCurrentHeader
+  -- if log.hasErrors then return
+  -- let impsWithRefs := headerToImportRefsWithWhitespace header
+  logInfo m!"{transNeeds.toImports (← getEnv)}"
+  -- let msg := Import.prettyWithWhitespaceFromSourceAndErrorComment reducedImps impsWithRefs
+  -- let str := msg.pretty
+  -- let _e ← Elab.Command.liftCoreM <|
+  --   Meta.Hint.mkSuggestionsMessage #[{ suggestion := str, diffGranularity := .word}] (mkNullNode (impsWithRefs.map (·.1.stx.raw))) none false
+  -- logInfo m!"{e}"
 
+-- #min_imports
+
+run_cmd do
+  let env ← getEnv
+  let mut encountered : Std.HashSet Name := {}
+  let mut outOfOrder : Std.HashMap (Name × Nat) (Array Import) := {}
+  for h : i in 0...env.header.moduleData.size do
+    let { imports .. } := env.header.moduleData[i]
+    let name := env.header.modules[i]!.module
+    let notEncounteredYet := imports.filter (!encountered.contains ·.module)
+    unless notEncounteredYet.isEmpty do
+      outOfOrder := outOfOrder.insert (name, i) notEncounteredYet
+    encountered := encountered.insert name
+  let (eventuallyEncountered, notEncountered) :=
+    outOfOrder.valuesArray.flatten.partition (encountered.contains ·.module)
+  logInfo m!"\n\
+    total := {env.header.moduleData.size}\n\
+    eventuallyEncountered := {eventuallyEncountered.size}\n\
+    notEncountered := {notEncountered.size}\n\
+    {outOfOrder.toArray.qsort (·.1.2 < ·.1.2)}"
 
 
 -- /--
