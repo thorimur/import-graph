@@ -14,7 +14,10 @@ public meta import ImportGraph.Shake.Algebra
 public meta import ImportGraph.Shake.Basic
 public meta import ImportGraph.Imports.Pretty
 import all ImportGraph.Shake.Environment
+public meta import ImportGraph.Lean.Environment
 import Lean
+public meta import ImportGraph.Tools.NeedsGrid
+import all ImportGraph.Tools.NeedsGrid
 
 public meta section
 
@@ -38,20 +41,32 @@ def ImportGraph.parseCurrentHeader {m} [Monad m] [MonadLog m] [MonadLiftT IO m] 
 
 open ImportGraph
 
+def _root_.Lean.Syntax.unsetLeading (stx : Syntax) : Syntax :=
+  stx.setHeadInfo (match stx.getHeadInfo with | .original _ pos trailing endPos => .original "".toRawSubstring pos trailing endPos | info => info)
+
+-- TODO: Say minimized if they match
 elab "#min_imports" : command => do
   let transDeps := (← getEnv).mkTransDeps
   let transNeeds := (← getEnv).transNeeds transDeps
-  -- let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
-  -- let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
-  -- let (header, _, log) ← parseCurrentHeader
-  -- if log.hasErrors then return
-  -- let impsWithRefs := headerToImportRefsWithWhitespace header
-  logInfo m!"{transNeeds.toImports (← getEnv)}"
-  -- let msg := Import.prettyWithWhitespaceFromSourceAndErrorComment reducedImps impsWithRefs
-  -- let str := msg.pretty
-  -- let _e ← Elab.Command.liftCoreM <|
-  --   Meta.Hint.mkSuggestionsMessage #[{ suggestion := str, diffGranularity := .word}] (mkNullNode (impsWithRefs.map (·.1.stx.raw))) none false
-  -- logInfo m!"{e}"
+  let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+  let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
+  let (header, _, log) ← parseCurrentHeader
+  if log.hasErrors then return
+  let impsWithRefs := headerToImportRefsWithWhitespace header
+  let msg := Import.prettyWithWhitespaceFromSourceAndErrorComment reducedImps impsWithRefs
+  let str := msg.pretty
+  let stxRef := mkNullNode (impsWithRefs.map (·.1.stx.raw) |>.modify 0 (·.unsetLeading))
+  let startPos := stxRef.getPos?.get!
+  let stopPos := stxRef.getTrailingTailPos?.get!
+  let substr : Substring.Raw := ⟨(← getFileMap).source, startPos, stopPos⟩
+  if substr.toString == str then
+    logInfo m!"Imports are minimal."
+  else
+
+    let e ← Elab.Command.liftCoreM <|
+      -- Need `.ofRange` here to insist on overwriting trailing whitespace.
+      Meta.Hint.mkSuggestionsMessage #[{ suggestion := str, diffGranularity := .auto}] (Syntax.ofRange ⟨startPos, stopPos⟩) none false
+    logInfo m!"{e}"
 
 -- #min_imports
 

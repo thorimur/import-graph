@@ -1,12 +1,16 @@
 module
 
-import ImportGraph.Tools.MinImports
 public meta import Lean.Elab.Command
+
+
+import ImportGraph.Tools.MinImports -- shake: keep
+
+-- Hmmm
 
 #min_imports
 
 -- run_cmd do
-
+-- More of a comment than a question, but...
 open Lean
 
 run_cmd do
