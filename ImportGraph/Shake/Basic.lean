@@ -142,6 +142,17 @@ def Needs.toImports (env : Environment) (n : Needs) : Array Import := Id.run do
       importAll := false }
   return out
 
+def _root_.Lean.Import.includeAll (sourceImports newImports : Array Import) :
+    Array Import := Id.run do
+  let mut newImports := newImports
+  for imp in sourceImports do
+    if imp.importAll then
+      -- Delete any which match up to `importAll`, then include the `all`
+      newImports := newImports.filter fun newImp =>
+        newImp != { imp with importAll := newImp.importAll}
+      newImports := newImports.push imp
+  return newImports
+
 instance : SDiff Needs where
   sdiff a b := a.map₂ b (· \ ·)
 
