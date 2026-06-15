@@ -43,7 +43,7 @@ scoped instance : Shake.HPostcomp Needs Import Needs where
 /-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
 @[inline] def _root_.Lean.Import.transitiveClosureSingle (i : Nat) (imp : Import)
     (transDeps : Hierarchy) : Needs :=
-  imp.addPostcompose (.single { imp with } i) transDeps[i]!
+  (.single i { imp with }) ∪ (transDeps[i]! ≫ imp)
 
 scoped instance : Shake.HTransClosure Hierarchy (ModuleIdx × Import) Needs where
   htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps

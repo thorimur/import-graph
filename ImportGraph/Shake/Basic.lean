@@ -85,7 +85,7 @@ protected def Needs.forIn {m} [Monad m] {β : Type} (s : Needs) (init : β)
 instance {m} [Monad m] : ForIn m Needs (NeedsKind × Nat) where
   forIn := Needs.forIn
 
-def Needs.single (k : NeedsKind) (i : Nat) : Needs := Needs.empty.set k {i}
+def Needs.single (i : Nat) (k : NeedsKind) : Needs := Needs.empty.set k {i}
 
 @[inline] def Needs.onAll (n : Needs) (via : Array NeedsKind → (NeedsKind → β) → α)
     (f : Bitset → β) : α := via NeedsKind.all (f <| n.get ·)
