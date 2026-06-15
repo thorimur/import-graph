@@ -141,4 +141,12 @@ Practically, we can do this by iterating backwards through the topological sort 
 
 A note on the global hierarchy structure: by design, `⟦_⟫` "breaks" compositions. We cannot actually detect whether a module `i` is higher or lower in the hierarchy overall than a module `j` simply by comparing `𝓘 ↓ i` and `𝓘 ↓ j`, in general. Instead, we need to record a separate "precedes" relation `j` on each module `i`. This is not provided out of the box by shake API, but we use the same `Bitset` approach to extend `Needs`.
 
+### Upwards fragments of hierarchies
+
+Actual `Environment`s only see an "upwards fragment" of the import hierarchy, in the sense that only modules reachable through `public import`s receive a `ModuleIdx` and an entry in fields like `header.modules` `header.moduleData` and similar `Array` fields. (Technically, we "know about"  all generators (`[_⟩`) impinging on any such module, including private ones, through `env.header.moduleData[i].imports`. ) (We also import modules reachable through `import all`s.)
+
+It is at this point that we realize we must manage our module sets more carefully on the implementation side.
+
+
+
 -/
