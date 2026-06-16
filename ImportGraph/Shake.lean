@@ -25,9 +25,14 @@ This information arises from usages of declarations and metaprograms from `j` wi
 
 ## Theory
 
-Abstractly, we model import hierarchies participating in the module system as a set of objects (modules) together with generating relations of the form `j [m, p⟩ i` between them denoting `import` statements.
+Abstractly, we model import hierarchies participating in the module system as a set of objects
+(modules) together with generating relations of the form `j [m, p⟩ i` between them denoting
+`import` statements.
 
-Specifically, let `m ∈ {0,1}` denote the **phase**, i.e. whether the import is `meta` (`1`) or not (`0`), and `p ∈ {0,1,2}` denote the **visibility**, i.e. whether the import is private (unadorned) (`0`), `public` (`1`), or `import all` (`2`). (We use digits here for conciseness of notation in future expressions.) Together, we call `k = (m,p)` the **availability**.
+Specifically, let `m ∈ {0,1}` denote the **phase**, i.e. whether the import is `meta` (`1`) or not \
+(`0`), and `p ∈ {0,1,2}` denote the **visibility**, i.e. whether the import is private (unadorned)
+(`0`), `public` (`1`), or `import all` (`2`). (We use digits here for conciseness of notation in
+future expressions.) Together, we call `k = (m,p)` the **availability**.
 
 We have `j [k⟩ i` if `i` directly imports `j` at availability `k`. For example, `j [0,1⟩ i` with `m = 0`, `p = 1` means that `i` has a direct import of `public import <j>`. (Mnemonic: information flows left to right, along the arrow.)
 
