@@ -85,8 +85,8 @@ structure Whitespace where
   leading : String
   trailing : String
 
-def _root_.Lean.TSyntax.updateLeading {ks} (t : TSyntax ks) : TSyntax ks :=
-  ⟨t.raw.updateLeading⟩
+-- def _root_.Lean.TSyntax.updateLeading {ks} (t : TSyntax ks) : TSyntax ks :=
+--   ⟨t.raw.updateLeading⟩
 
 def _root_.Lean.TSyntax.updateLeadingPreservingStart {ks} (t : TSyntax ks) : TSyntax ks :=
   ⟨t.raw.updateLeadingPreservingStart⟩
@@ -282,6 +282,8 @@ protected inductive Import.FormatBehavior where
 
 instance : ToFormat (Import × Whitespace) where
   format := fun (imp, ws) => ws.around imp
+
+-- TODO: use `FormatBehavior` to create a single `pretty` even without whitespace
 
 def prettyWithWhitespace (imps : Array (Import × Whitespace))
     (fmtBehavior := Import.FormatBehavior.grouped) : Format := Id.run do

@@ -5,18 +5,22 @@ Authors: Kim Morrison, Paul Lezeau
 -/
 module
 
-public meta import Lean.Elab.Command
-public meta import Lean.Widget.UserWidget
-public meta import ImportGraph.Imports.RequiredModules
-public meta import ImportGraph.Imports.Redundant
-public meta import ImportGraph.Shake.Environment
-public meta import ImportGraph.Shake.Algebra
-public meta import ImportGraph.Shake.Basic
 public meta import ImportGraph.Imports.Pretty
-import all ImportGraph.Shake.Environment
+-- Test
+public meta import ImportGraph.Imports.Redundant
+public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Lean.Environment
-import Lean
+public meta import ImportGraph.Shake.Algebra
+public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Tools.NeedsGrid
+
+import Lean
+import ImportGraph.Lean.Environment
+import ImportGraph.Shake.Algebra
+import ImportGraph.Shake.Basic
+import Lake.CLI.Shake
+
+import all ImportGraph.Shake.Environment
 import all ImportGraph.Tools.NeedsGrid
 
 public meta section
@@ -42,32 +46,55 @@ def ImportGraph.parseCurrentHeader {m} [Monad m] [MonadLog m] [MonadLiftT IO m] 
 open ImportGraph
 
 def _root_.Lean.Syntax.unsetLeading (stx : Syntax) : Syntax :=
-  stx.setHeadInfo (match stx.getHeadInfo with | .original _ pos trailing endPos => .original "".toRawSubstring pos trailing endPos | info => info)
+  stx.setHeadInfo <|
+    match stx.getHeadInfo with
+    | .original _ pos trailing endPos => .original "".toRawSubstring pos trailing endPos
+    | info => info
 
--- TODO: Say minimized if they match
-elab "#min_imports" : command => do
+def _root_.Lean.SourceInfo.getLeadingPos? (info : SourceInfo) (canonicalOnly := false) :
+    Option String.Pos.Raw :=
+  match info, canonicalOnly with
+  | .original (leading := leading) ..,  _ => some leading.startPos
+  | .synthetic (pos := pos) (canonical := true) .., _
+  | .synthetic (pos := pos) .., false => some pos
+  | _,                         _     => none
+
+def _root_.Lean.Syntax.getLeadingPos? (stx : Syntax) (canonicalOnly := false) :
+    Option String.Pos.Raw :=
+  stx.getHeadInfo.getLeadingPos? canonicalOnly
+
+elab tk:"#norm_imports" : command => do
+  unless (← getOptions).getBool `Elab.inServer do
+    throwError "`#norm_imports` can only be used interactively."
   let transDeps := (← getEnv).mkTransDeps
   let transNeeds := (← getEnv).transNeeds transDeps
   let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+  -- TODO: remove private imports that come from `import all`
   let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
   let (header, _, log) ← parseCurrentHeader
   if log.hasErrors then return
   let impsWithRefs := headerToImportRefsWithWhitespace header
   let msg := Import.prettyWithWhitespaceFromSourceAndErrorComment reducedImps impsWithRefs
-  let str := msg.pretty
-  let stxRef := mkNullNode (impsWithRefs.map (·.1.stx.raw) |>.modify 0 (·.unsetLeading))
-  let startPos := stxRef.getPos?.get!
+  let str := s!"\n\n{msg.pretty}" -- Two newlines after `module`
+  let stxRef := mkNullNode (impsWithRefs.map (·.1.stx.raw))
+  let startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
+  -- Ensure we include any annotation after the last import
   let stopPos := stxRef.getTrailingTailPos?.get!
   let substr : Substring.Raw := ⟨(← getFileMap).source, startPos, stopPos⟩
   if substr.toString == str then
-    logInfo m!"Imports are minimal."
+    logInfo m!"Imports are normalized."
   else
-
     let e ← Elab.Command.liftCoreM <|
       -- Need `.ofRange` here to insist on overwriting trailing whitespace.
-      Meta.Hint.mkSuggestionsMessage #[{ suggestion := str, diffGranularity := .auto}] (Syntax.ofRange ⟨startPos, stopPos⟩) none false
-    logInfo m!"{e}"
+      Meta.Hint.mkSuggestionsMessage #[{
+          suggestion := str
+          span? := Syntax.ofRange ⟨startPos, stopPos⟩ }]
+        tk "Normalize imports: " false
+    logWarning m!"Imports can be normalized:{e}"
 
+#norm_imports
+
+-- #norm_imports
 -- #min_imports
 
 run_cmd do
@@ -103,7 +130,7 @@ run_cmd do
 --     |>.toList.map (fun n => "public import " ++ n.toString)
 --   logInfo <| Format.joinSep imports "\n"
 
--- deprecated since 2024-07-06
-elab "#minimize_imports" : command => do
-  logWarning m!"'#minimize_imports' is deprecated: please use '#min_imports'"
-  Elab.Command.elabCommand (← `(command| #min_imports))
+-- -- deprecated since 2024-07-06
+-- elab "#minimize_imports" : command => do
+--   logWarning m!"'#minimize_imports' is deprecated: please use '#min_imports'"
+--   Elab.Command.elabCommand (← `(command| #min_imports))
