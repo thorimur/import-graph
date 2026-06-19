@@ -127,6 +127,8 @@ open EnvExtension
 
 -- TODO: not sure if these really can all use `.local`. Seems a bit scary to me.
 
+-- TODO: really we want something like `rebaseShakeExts`. We want to stick with the destination environment overall, but the destination environment's new shake additions should come *after* the old source environment.
+
 public def copyExtraModUses' (src dest : Environment)
     (srcAsyncMode := extraModUsesAsyncMode)
     (destAsyncMode := extraModUsesAsyncMode) (destAsyncDecl := Name.anonymous) :
@@ -197,6 +199,7 @@ def withFreshModRecords' [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α)
 /-- Resets the shake extensions that record modules, then restores them after running the given action, merging any new records into the new ones. -/
 def withFreshModRecords [Monad m] [MonadEnv m] [MonadFinally m] {α} (x : m α) : m α := do
   let oldEnv ← getEnv
-  try x finally modifyEnv fun newEnv => copyShakeExts newEnv oldEnv
+  modifyEnv resetShakeExts
+  try x finally modifyEnv fun newEnv => copyShakeExts oldEnv newEnv
 
 -- TODO: the above is overzealous around recording rev mod uses, I think.
