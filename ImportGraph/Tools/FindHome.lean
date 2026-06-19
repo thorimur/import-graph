@@ -9,7 +9,13 @@ public meta import Lean.Elab.Command
 public meta import Lean.Widget.UserWidget
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Imports.ImportGraph
+public meta import ImportGraph.Imports.Pretty
 public meta import ImportGraph.Graph.TransitiveClosure
+public meta import ImportGraph.Shake.EnvExtension
+public meta import ImportGraph.Shake.DeclNeeds
+public meta import ImportGraph.Shake.Environment
+public meta import ImportGraph.Shake.Algebra
+public meta import ImportGraph.Shake.Basic
 meta import all Lean.ExtraModUses
 public meta import Lake.CLI.Shake
 public meta import ImportGraph.Lean.Environment
@@ -76,6 +82,14 @@ namespace Lake.Shake
 
 -- To get the current
 
+/-
+Right now:
+
+
+- `#show_imports`
+- fix prevs
+- end-of-file min_imports
+-/
 
 
 elab "#trans_deps" : command => do
@@ -94,26 +108,6 @@ elab "#trans_deps" : command => do
 
 -- TODO: `#min_imports!` needs to consider extraRevModUse. So does
 
-open Elab Command in
-elab "#min_imports" : command => do
-  let { transDeps .. } := initStateFromEnv (← getEnv)
-  let transImps := (← getEnv).transImps transDeps
-  let mut newImports := transImps.reduce transDeps |>.toImports (← getEnv) |>.filter
-    fun { module .. } => !(`Init).isPrefixOf module
-  for imp in (← getEnv).header.imports do
-    if imp.importAll then
-      if let some ⟨idx,_⟩ := newImports.findFinIdx? (fun { module, isMeta, .. } =>
-          module = imp.module && isMeta = imp.isMeta)
-      then
-        newImports := newImports.set idx imp
-      else
-        newImports := newImports.push imp
-
-
-  -- TODO: postprocessing step that adds back in import all's in place of imports where relevant
-  -- logInfo m!"{transImps.toMessageData (← getEnv)}"
-  logInfo m!"{newImports}"
-
 def addCurrentExtraModUses (env : Environment) (needs : Needs) : Needs := Id.run do
   let mut needs := needs
   for use in getExtraModUsesState env |>.1 do
@@ -121,10 +115,11 @@ def addCurrentExtraModUses (env : Environment) (needs : Needs) : Needs := Id.run
   return needs
 
 
+
 open Elab Command
 /-- Note: does **not** capture extra rev mod uses influencing the file as a whole. -/
 def withElabCommandCapturingNeeds (cmd : Syntax.Command)
-    (f : Needs → DeclNeeds → CommandElabM β) : CommandElabM β := do
+    (f : Needs → DeclNeeds → Array Name → CommandElabM β) : CommandElabM β := do
   withFreshModRecords do
     let oldEnv ← getEnv
     elabCommand cmd
@@ -140,9 +135,25 @@ def withElabCommandCapturingNeeds (cmd : Syntax.Command)
       fun acc@(needs, declNeeds) decl _ =>
         if oldEnv.contains decl then acc else calcDeclNeeds decl env needs declNeeds
     needs := addCurrentExtraModUses env needs
-    f needs declNeeds
+    f needs declNeeds decls
 
-def
+open Elab Command in
+elab "#show_imports" ppLine cmd:command : command => do
+  let transDeps := (← getEnv).mkTransDeps
+  let (needs, declNeeds, decls) ← withElabCommandCapturingNeeds cmd fun needs declNeeds decls =>
+    return (needs, declNeeds, decls)
+  let reduced := needs.reduce transDeps |>.toImports (← getEnv)
+  logInfo m!"{decls.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+
+
+open Elab Command in
+elab "#find_home" ppLine cmd:command : command => do
+  let transDeps := (← getEnv).mkTransDeps
+  let (needs, declNeeds, decls) ← withElabCommandCapturingNeeds cmd fun needs declNeeds decls =>
+    return (needs, declNeeds, decls)
+  let reduced := needs.reduce transDeps |>.toImports (← getEnv)
+  logInfo m!"{decls.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+
 
 def addExtraRevModUses (env : Environment) (needs : Needs) : Needs := Id.run do
   let mut needs := needs
@@ -160,27 +171,6 @@ def addExtraRevModUses (env : Environment) (needs : Needs) : Needs := Id.run do
 -- Also, try-this for replacing imports and such. Should `#min_imports` just be a lightbulb?
 
 
-
-def elabCommandCapturingDeps
-
-#trans_deps
-open Elab Command in
-elab "#show_imports" ppLine cmd:command : command => do
-  let { transDeps .. } := initStateFromEnv (← getEnv)
-  let needs ← withFreshModRecords do
-    elabCommand cmd
-    recordUsedSyntaxKinds cmd
-    let indirect := getIndirectModUsesState (← getEnv)
-    let (extras, _) := getExtraModUsesState (← getEnv)
-    let decls := cmd.raw.getPos?.get!.getDeclsAfter' (← getEnv) (← getFileMap)
-    let mut needs := .empty
-    let mut declNeeds := {}
-    for decl in decls do
-      (needs, declNeeds) := calcDeclNeeds decl (← getEnv) needs declNeeds
-    pure (needs, declNeeds, indirect, extras)
-  logInfo m!"{needs.1.toMessageData (← getEnv)}{needs.2.2}\n\n\n\
-    {transDeps[3]!.toMessageData (← getEnv)}\n\
-    {needs.1.reduce transDeps |>.toMessageData (← getEnv)}"
 
 
 #show_imports
