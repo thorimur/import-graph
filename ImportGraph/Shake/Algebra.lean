@@ -192,6 +192,11 @@ def Needs.reduce (a : Needs) (transDeps : Hierarchy) : Needs := Id.run do
       return as
   return as.push a
 
+@[inline] def Std.HashMap.incorporateBelowAt {κ} [BEq κ] [Hashable κ]
+    (map : Std.HashMap κ (Array (Option α))) (k : κ) (a : α) (lt : α → α → Bool) :
+    Std.HashMap κ (Array (Option α)) := map.alter k fun arr? =>
+      arr?.getD #[] |>.incorporateBelow a lt
+
 -- TODO: might want to sort by things like "fewest public imports" instead?
 /-- Finds the modules `i` that provide `needs` according to `transDeps` (including `i`'s public and
 private scopes), and are lowest according to `lt`. `needs` does not need to be
@@ -210,10 +215,17 @@ def Needs.coveringsBy (transDeps : Hierarchy) (needs : Needs) (lt : ModuleIdx �
 /-- Finds the modules `i` that provide `needs` according to `transDeps` (including `i`'s public and
 private scopes), and are lowest in the hierarchy according to `prevs`. `needs` does not need to be
 transitively closed, nor does `transDeps` need to be filled. -/
-@[inline] def Needs.coverings (transDeps : Hierarchy) (prevs : Array Bitset) (needs : Needs) :=
+@[inline] def Needs.coverings (transDeps : Hierarchy) (prevs : Array Bitset) (needs : Needs) :
+    Array ModuleIdx :=
   needs.coveringsBy transDeps fun i j => prevs[i]!.lt prevs[j]!
+
+end Lake.Shake
+
+namespace ImportGraph
 
 def sortByDepthThenSize (mods : Array ModuleIdx) (depths : Array Nat) (prevs : Array Bitset) :
     Array ModuleIdx :=
   mods.qsort fun i j =>
     (compare depths[i]! depths[j]! |>.then <| compare prevs[i]!.size prevs[j]!.size).isLT
+
+end ImportGraph
