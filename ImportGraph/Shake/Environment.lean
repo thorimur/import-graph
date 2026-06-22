@@ -143,13 +143,13 @@ def KeyedArray.alter {γ} (arr : KeyedArray γ) (i : Nat) (f : Option γ → Opt
   match compare i arr.size with
   | .lt => arr.modify i f
   | .eq => arr.push (f none)
-  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size - 1) none |>.push (f none)
+  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size) none |>.push (f none)
 
 nonrec def KeyedArray.set! {γ} (arr : KeyedArray γ) (i : Nat) (val : γ) :=
   match compare i arr.size with
   | .lt => arr.set! i val
   | .eq => arr.push val
-  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size - 1) none |>.push val
+  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size) none |>.push val
 
 def KeyedArray.mkEmptyForIdxs (keyIdxs : Array Nat) :
     KeyedArray γ :=
