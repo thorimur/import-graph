@@ -269,7 +269,7 @@ instance [MonadStateOf (KeyStore κ) m] : MonadImportFlow κ γ m where
   -- getPreviousValRaw? modIdx keyIdx :=
   --   return (← getThe (ImportFlowState κ γ)).vals[modIdx]!.get? keyIdx
 
-def ImportFlowState.next : m Unit := do
+def ImportFlowState.next (κ γ : Type) [MonadStateOf (ImportFlowState κ γ) m] : m Unit := do
   modifyThe (ImportFlowState κ γ) fun s => { s with
     currentIdx := (id s.currentIdx : Nat) + 1
     currentVals := #[]
@@ -281,8 +281,8 @@ abbrev ImportFlowRefT (κ) [BEq κ] [Hashable κ] (γ) (m : Type → Type)
   StateRefT (ImportFlowState κ γ) $ StateRefT (KeyStore κ) m
 
 nonrec def ImportFlowRefT.run {ω} {κ} [BEq κ] [Hashable κ] {γ}
-    (m : Type → Type) [Monad m] [MonadLiftT (ST ω) m] [STWorld ω m]
-    {α} (x : ImportFlowRefT κ γ m α) (s : ImportFlowState κ γ) (keys : KeyStore κ := {}) :=
+    {m : Type → Type} [Monad m] [MonadLiftT (ST ω) m] [STWorld ω m]
+    {α} (x : ImportFlowRefT κ γ m α) (s : ImportFlowState κ γ := {}) (keys : KeyStore κ := {}) :=
   x.run s |>.run keys
 
 -- nonrec def ImportFlowRefT.run' {ω} {κ} [BEq κ] [Hashable κ] {γ}
@@ -296,8 +296,8 @@ abbrev ImportFlowT (κ) [BEq κ] [Hashable κ] (γ) (m : Type → Type) :=
   StateT (ImportFlowState κ γ) <| StateT (KeyStore κ) m
 
 nonrec def ImportFlowT.run {κ} [BEq κ] [Hashable κ] {γ}
-    (m : Type → Type) [Monad m]
-    {α} (x : ImportFlowT κ γ m α) (s : ImportFlowState κ γ) (keys : KeyStore κ := {}) :=
+    {m : Type → Type} [Monad m]
+    {α} (x : ImportFlowT κ γ m α) (s : ImportFlowState κ γ := {}) (keys : KeyStore κ := {}) :=
   x.run s |>.run keys
 
 -- nonrec def ImportFlowT.run' {κ} [BEq κ] [Hashable κ] {γ}
@@ -320,7 +320,8 @@ def Preceding.add (i : ModuleIdx) (iPreceding? : Option Preceding) (p : Precedin
     prev  := p.prev ∪ {i} ∪ prev
     depth := max p.depth (depth + 1) }
 
-def Preceding.copyInto (p₁ p₂ : Option Preceding) : Option Preceding :=
+/-- If either of `p₁`, `p₂` are `none`, yields `p₁ <|> p₂`. Else, yields the union and max of the `Preceding` fields. -/
+def Preceding.union (p₁ p₂ : Option Preceding) : Option Preceding :=
   match p₁, p₂  with
   | some p₁, some p₂ => some { p₂ with prev := p₁.prev ∪ p₂.prev, depth := max p₁.depth p₂.depth }
   | p₁, p₂ => p₁ <|> p₂
@@ -365,6 +366,15 @@ def addForAllKeysOfImports
   for imp in imps do
     let j := env.getModuleIdx! imp.module
     addForAllSourceKeysM j (add j imp)
+
+@[inline] def addProjectRootValOfImport (j : ModuleIdx) (imp : Import) (key : Name)
+    (jVal? tgtVal? : Option Preceding) : Option Preceding :=
+  -- If the key is `.anonymous` or the root of `j`, then include `j`.
+  -- Else, copy over `j`'s priors.
+  if key.isAnonymous || key == imp.module.getRoot then
+    Preceding.add j jVal? (tgtVal?.getD {})
+  else
+    Preceding.union jVal? tgtVal?
 -- There's a sense in which we need to compare the key being copied to the root of the module and if so, copy it.
 def addProjectRootValsOfImports
     [MonadStateOf (ImportFlowState Name Preceding) m] [MonadStateOf (KeyStore Name) m]
@@ -374,14 +384,7 @@ def addProjectRootValsOfImports
     : m Unit := do
   MonadImportFlow.setCurrentVal mod.getRoot { : Preceding }
   MonadImportFlow.setCurrentVal Name.anonymous { : Preceding }
-  addForAllKeysOfImports env imps fun j imp key jPreceding? tgtPreceding? =>
-    -- If the key is `.anonymous` or the root of `j`, then include `j`.
-    -- Else, copy over `j`'s priors.
-    -- (Should we unify `copyInto` and `add`? Though, they do have different behavior.)
-    if key.isAnonymous || key == imp.module.getRoot then
-      Preceding.add j jPreceding? tgtPreceding?.get!
-    else
-      Preceding.copyInto jPreceding? tgtPreceding?
+  addForAllKeysOfImports env imps addProjectRootValOfImport
 
 
 -- General case:
@@ -412,44 +415,37 @@ We want prevs by root. So for each module, we have its root, and for each import
 --           flows := flows ++ keys.map ((j,·))
 --   return flows
 
+protected def initStateWithPrecedingM (env : Environment)
+    {m} [Monad m]
+    [MonadStateOf (KeyStore Name) m] [MonadStateOf (ImportFlowState Name Preceding) m] :
+    m Lake.Shake.State := do
+  let mut s : Lake.Shake.State := { env, transDeps := Array.mkEmpty env.header.moduleData.size }
+  for i in 0...env.header.moduleData.size do
+    let mod := env.header.moduleData[i]!
+    let mut transImps := Needs.empty
+    let modName := env.header.modules[i]!.module
+    MonadImportFlow.setCurrentVal modName.getRoot { : Preceding }
+    MonadImportFlow.setCurrentVal Name.anonymous { : Preceding }
+    for imp in mod.imports do
+      let j := env.getModuleIdx! imp.module
+      transImps := addTransitiveImps transImps imp j s.transDeps[j]!
+      addForAllSourceKeysM j (addProjectRootValOfImport j imp)
+    s := { s with transDeps := s.transDeps.push transImps }
+    ImportFlowState.next Name Preceding
+  return s
 
-protected partial def ImportGraph.initStateFromEnv {κ} [BEq κ] [Hashable κ] (env : Environment)
-    : ImportGraph.State κ γ := Id.run do
-  let (s, keyStore) := ImportFlowState do
-    let mut s : ImportGraph.CoreState := {
-      env
-      transDeps := Array.mkEmpty env.header.moduleData.size
-      prevs := Array.mkEmpty env.header.moduleData.size
-      depths := Array.mkEmpty env.header.moduleData.size }
-    for i in 0...env.header.moduleData.size do
-      let mod := env.header.moduleData[i]!
-      let mut transImps := Needs.empty
-      let mut idxs ← importKey.initKeys i s |>.mapM KeyStore.getIdxOf
-      let mut prevs : KeyedArray Bitset := KeyedArray.mkInitForIdxs idxs
-      let mut depths : KeyedArray Nat := KeyedArray.mkInitForIdxs idxs
-      for imp in mod.imports do
-        let j := env.getModuleIdx! imp.module
-        let keyIdxs ← importKey.toKeys j imp i s |>.mapM fun { target, sources } => do
-          let tgtIdx ← KeyStore.getIdxOf target
-          return {
-            target := tgtIdx,
-            sources := ← sources.mapM KeyStore.getIdxOf : ModificationKey Nat }
-        -- imps := imps.push j
-        transImps := addTransitiveImps transImps imp j s.transDeps[j]!
-        for { target, sources } in keyIdxs do
-          for srcIdx in sources do
-            prevs := prevs.alter target (TreeFlow.add (s.prevs[j]!.get? srcIdx) · |>.map (· ∪ {j}))
-            depths := depths.alter target (TreeFlow.add (s.depths[j]!.get? srcIdx))
-        -- if prevFilter imp then
-        --   prev := prev ∪ {j} ∪ s.prevs[j]!
-        --   depth := max depth (s.depths[j]! + 1)
-      s := { s with
-        transDeps := s.transDeps.push transImps
-        prevs := s.prevs.push prevs
-        depths := s.depths.push depths }
-    s := { s with transDepsOrig := s.transDeps }
-    return s
-  return { s with toImportKeyGen := importKey, toKeyStore := keyStore }
+def Shake.StateWithPreceding := ImportGraph.State Name Preceding
+
+protected def initStateWithPrecedingIO (env : Environment) :
+    IO Shake.StateWithPreceding := do
+  let ((s, flow), keys) ← ImportFlowRefT.run do initStateWithPrecedingM env
+  return { s with toKeyStore := keys, vals := flow.vals }
+
+protected def initStateWithPreceding (env : Environment) :
+    Shake.StateWithPreceding := Id.run do
+  let ((s, flow), keys) ← ImportFlowT.run do initStateWithPrecedingM env
+  return { s with toKeyStore := keys, vals := flow.vals }
+
 
 
 
@@ -465,41 +461,3 @@ protected partial def ImportGraph.initStateFromEnv {κ} [BEq κ] [Hashable κ] (
 
 -- What if we allowed just an arbitrary function that had access to the module data and module index, but had a nice API for adding data to keys by working in a nice monad?
 -- `∪ {j}` shows we need more freedom here.
-
--- protected partial def ImportGraph.initStateFromEnv {α} [BEq α] [Hashable α] (env : Environment)
---     (importKey : ImportKeyGen α) : ImportGraph.State α := Id.run do
---   let (s, keyStore) := StateT.run (m := Id) (s := { : KeyStore α }) do
---     let mut s : ImportGraph.CoreState := {
---       env
---       transDeps := Array.mkEmpty env.header.moduleData.size
---       prevs := Array.mkEmpty env.header.moduleData.size
---       depths := Array.mkEmpty env.header.moduleData.size }
---     for i in 0...env.header.moduleData.size do
---       let mod := env.header.moduleData[i]!
---       let mut transImps := Needs.empty
---       let mut idxs ← importKey.initKeys i s |>.mapM KeyStore.getIdxOf
---       let mut prevs : KeyedArray Bitset := KeyedArray.mkInitForIdxs idxs
---       let mut depths : KeyedArray Nat := KeyedArray.mkInitForIdxs idxs
---       for imp in mod.imports do
---         let j := env.getModuleIdx! imp.module
---         let keyIdxs ← importKey.toKeys j imp i s |>.mapM fun { target, sources } => do
---           let tgtIdx ← KeyStore.getIdxOf target
---           return {
---             target := tgtIdx,
---             sources := ← sources.mapM KeyStore.getIdxOf : ModificationKey Nat }
---         -- imps := imps.push j
---         transImps := addTransitiveImps transImps imp j s.transDeps[j]!
---         for { target, sources } in keyIdxs do
---           for srcIdx in sources do
---             prevs := prevs.alter target (TreeFlow.add (s.prevs[j]!.get? srcIdx) · |>.map (· ∪ {j}))
---             depths := depths.alter target (TreeFlow.add (s.depths[j]!.get? srcIdx))
---         -- if prevFilter imp then
---         --   prev := prev ∪ {j} ∪ s.prevs[j]!
---         --   depth := max depth (s.depths[j]! + 1)
---       s := { s with
---         transDeps := s.transDeps.push transImps
---         prevs := s.prevs.push prevs
---         depths := s.depths.push depths }
---     s := { s with transDepsOrig := s.transDeps }
---     return s
---   return { s with toImportKeyGen := importKey, toKeyStore := keyStore }
