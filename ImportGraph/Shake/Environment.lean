@@ -308,6 +308,7 @@ nonrec def ImportFlowT.run {κ} [BEq κ] [Hashable κ] {γ}
 structure Preceding where
   prev : Bitset := {}
   depth : Nat := 0
+  participating := false
 deriving Inhabited, BEq, Repr
 
 -- just `let { prev, depth } := iPreceding?.getD {}` + second branch?
@@ -316,7 +317,7 @@ def Preceding.add (i : ModuleIdx) (iPreceding? : Option Preceding) (p : Precedin
   | none => { p with
     prev := p.prev ∪ {i}
     depth := max p.depth 1 }
-  | some { prev, depth } => { p with
+  | some { prev, depth .. } => { p with
     prev  := p.prev ∪ {i} ∪ prev
     depth := max p.depth (depth + 1) }
 
@@ -324,7 +325,7 @@ def Preceding.add (i : ModuleIdx) (iPreceding? : Option Preceding) (p : Precedin
 def Preceding.union (p₁ p₂ : Option Preceding) : Option Preceding :=
   match p₁, p₂  with
   | some p₁, some p₂ => some { p₂ with prev := p₁.prev ∪ p₂.prev, depth := max p₁.depth p₂.depth }
-  | p₁, p₂ => p₁ <|> p₂
+  | p₁, p₂ => (p₁ <|> p₂).map ({ · with participating := p₂.elim false participating })
 
 structure ImportGraph.State (κ) (γ) [BEq κ] [Hashable κ] extends Lake.Shake.State, KeyStore κ where
   vals : Array (KeyedArray γ)
@@ -367,24 +368,24 @@ def addForAllKeysOfImports
     let j := env.getModuleIdx! imp.module
     addForAllSourceKeysM j (add j imp)
 
-@[inline] def addProjectRootValOfImport (j : ModuleIdx) (imp : Import) (key : Name)
+@[inline] def addProjectRootValOfImport (j : ModuleIdx)
     (jVal? tgtVal? : Option Preceding) : Option Preceding :=
   -- If the key is `.anonymous` or the root of `j`, then include `j`.
   -- Else, copy over `j`'s priors.
-  if key.isAnonymous || key == imp.module.getRoot then
+  if jVal?.elim false (·.participating) then
     Preceding.add j jVal? (tgtVal?.getD {})
   else
     Preceding.union jVal? tgtVal?
 -- There's a sense in which we need to compare the key being copied to the root of the module and if so, copy it.
-def addProjectRootValsOfImports
-    [MonadStateOf (ImportFlowState Name Preceding) m] [MonadStateOf (KeyStore Name) m]
-    (env : Environment)
-    (imps : Array Import)
-    (mod : Name)
-    : m Unit := do
-  MonadImportFlow.setCurrentVal mod.getRoot { : Preceding }
-  MonadImportFlow.setCurrentVal Name.anonymous { : Preceding }
-  addForAllKeysOfImports env imps addProjectRootValOfImport
+-- def addProjectRootValsOfImports
+--     [MonadStateOf (ImportFlowState Name Preceding) m] [MonadStateOf (KeyStore Name) m]
+--     (env : Environment)
+--     (imps : Array Import)
+--     (mod : Name)
+--     : m Unit := do
+--   MonadImportFlow.setCurrentVal mod.getRoot { : Preceding }
+--   MonadImportFlow.setCurrentVal Name.anonymous { : Preceding }
+--   addForAllKeysOfImports env imps fun j _ _ => addProjectRootValOfImport j
 
 
 -- General case:
@@ -424,12 +425,12 @@ protected def initStateWithPrecedingM (env : Environment)
     let mod := env.header.moduleData[i]!
     let mut transImps := Needs.empty
     let modName := env.header.modules[i]!.module
-    MonadImportFlow.setCurrentVal modName.getRoot { : Preceding }
-    MonadImportFlow.setCurrentVal Name.anonymous { : Preceding }
+    MonadImportFlow.setCurrentVal modName.getRoot { participating := true : Preceding }
+    MonadImportFlow.setCurrentVal Name.anonymous { participating := true : Preceding }
     for imp in mod.imports do
       let j := env.getModuleIdx! imp.module
       transImps := addTransitiveImps transImps imp j s.transDeps[j]!
-      addForAllSourceKeysM j (addProjectRootValOfImport j imp)
+      addForAllSourceKeysM j (fun _ : Name => addProjectRootValOfImport j)
     s := { s with transDeps := s.transDeps.push transImps }
     ImportFlowState.next Name Preceding
   return s
@@ -437,7 +438,7 @@ protected def initStateWithPrecedingM (env : Environment)
 def Shake.StateWithPreceding := ImportGraph.State Name Preceding
 
 protected def initStateWithPrecedingIO (env : Environment) :
-    IO Shake.StateWithPreceding := do
+    BaseIO Shake.StateWithPreceding := do
   let ((s, flow), keys) ← ImportFlowRefT.run do initStateWithPrecedingM env
   return { s with toKeyStore := keys, vals := flow.vals }
 
