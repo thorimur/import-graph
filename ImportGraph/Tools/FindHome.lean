@@ -16,6 +16,8 @@ public meta import ImportGraph.Shake.DeclNeeds
 public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Shake.Algebra
 public meta import ImportGraph.Shake.Basic
+public meta import ImportGraph.Shake.Coverings
+public meta import ImportGraph.Tools.NeedsGrid
 meta import all Lean.ExtraModUses
 public meta import Lake.CLI.Shake
 public meta import ImportGraph.Lean.Environment
@@ -27,6 +29,8 @@ import all ImportGraph.Shake.DeclNeeds
 import all ImportGraph.Shake.EnvExtension
 import all ImportGraph.Shake.Precedes
 import all ImportGraph.Shake.Environment
+import all ImportGraph.Shake.Coverings
+import all ImportGraph.Tools.NeedsGrid
 
 
 open Lean Lake Shake
@@ -92,17 +96,17 @@ Right now:
 -/
 
 
-elab "#trans_deps" : command => do
-  let { transDeps .. } := initStateFromEnv (← getEnv)
-  let mut isReflexive := #[]
-  let mut composed := #[]
-  for h : i in 0...transDeps.size do
-    if transDeps[i].has .pub i then
-      isReflexive := isReflexive.push i
-    for k in NeedsKind.all do
-      composed := composed.push (i, k, ((Needs.mapComposeSingle transDeps i k).has k i))
-  let env ← getEnv
-  logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
+-- elab "#trans_deps" : command => do
+--   let { transDeps .. } := initStateFromEnv (← getEnv)
+--   let mut isReflexive := #[]
+--   let mut composed := #[]
+--   for h : i in 0...transDeps.size do
+--     if transDeps[i].has .pub i then
+--       isReflexive := isReflexive.push i
+--     for k in NeedsKind.all do
+--       composed := composed.push (i, k, ((Needs.mapComposeSingle transDeps i k).has k i))
+--   let env ← getEnv
+--   logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
 
 
 
@@ -148,32 +152,41 @@ elab "#show_imports" ppLine cmd:command : command => do
 
 open Elab Command in
 elab "#find_home" ppLine cmd:command : command => do
-  let transDeps := (← getEnv).mkTransDeps
+  let env ← getEnv
+  let s ← ImportGraph.initStateWithPrecedingIO env
   let (needs, declNeeds, decls) ← withElabCommandCapturingNeeds cmd fun needs declNeeds decls =>
     return (needs, declNeeds, decls)
-  let reduced := needs.reduce transDeps |>.toImports (← getEnv)
-  logInfo m!"{decls.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+  logInfo m!"{← liftCoreM <| needs.toWidget env}"
+  let minimals := Needs.coveringsByProject s needs
+
+  -- Lake.CLI.Shake
+  let minimals := minimals.map fun (project, vals) =>
+    (project, vals.map (fun a : ModuleIdx × _ => env.header.modules[a.1]!.module))
+  logInfo m!"{minimals}"
+  -- let reduced := needs.reduce transDeps |>.toImports (← getEnv)
+  -- logInfo m!"{decls.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+
+-- #find_home
+
+-- def addExtraRevModUses (env : Environment) (needs : Needs) : Needs := Id.run do
+--   let mut needs := needs
+--   for entry in isExtraRevModUseExt.toEnvExtension.getState env |>.importedEntries do
+--     unless entry.isEmpty do
+--       needs := -- need to union it with the way the modules is imported now
 
 
-def addExtraRevModUses (env : Environment) (needs : Needs) : Needs := Id.run do
-  let mut needs := needs
-  for entry in isExtraRevModUseExt.toEnvExtension.getState env |>.importedEntries do
-    unless entry.isEmpty do
-      needs := -- need to union it with the way the modules is imported now
+
+
+-- -- One version that does this; another version that minimizes it on your actual file, with some hackery perhaps to ensure it's at the end.
+-- -- Ideally a widget with a promise that gets filled in by a linter at the end?
+-- -- Or not a promise, because that might not be editable. Just a ref that gets updated, maybe? Plus a ringing of a bell to update the widget...
+-- #min_imports
+-- -- Also, try-this for replacing imports and such. Should `#min_imports` just be a lightbulb?
 
 
 
 
--- One version that does this; another version that minimizes it on your actual file, with some hackery perhaps to ensure it's at the end.
--- Ideally a widget with a promise that gets filled in by a linter at the end?
--- Or not a promise, because that might not be editable. Just a ref that gets updated, maybe? Plus a ringing of a bell to update the widget...
-#min_imports
--- Also, try-this for replacing imports and such. Should `#min_imports` just be a lightbulb?
-
-
-
-
-#show_imports
+-- #show_imports
 /--
 Find locations as high as possible in the import hierarchy
 where the named declaration could live.
@@ -224,6 +237,7 @@ run_cmd do
 --   let r := isExtraRevModUseExt.getState (← getEnv)
 --   logInfo m!"{repr extra}"
 
+#exit
 
 open Server in
 /-- Tries to resolve the module `modName` to a source file URI.
