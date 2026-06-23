@@ -225,7 +225,7 @@ structure ImportFlowState (κ γ : Type) where
   currentIdx : ModuleIdx := (0 : Nat) -- Should this be a read-only value?
   currentVals : KeyedArray γ := #[]
   vals : Array (KeyedArray γ) := #[] -- maybe this should be read-only too? or in a different ref?
-  currentIdx_eq_next_vals : currentIdx = vals.size := by grind
+  currentIdx_eq_vals_size : currentIdx = vals.size := by grind
 
 section
 
@@ -274,7 +274,7 @@ def ImportFlowState.next (κ γ : Type) [MonadStateOf (ImportFlowState κ γ) m]
     currentIdx := (id s.currentIdx : Nat) + 1
     currentVals := #[]
     vals := s.vals.push s.currentVals
-    currentIdx_eq_next_vals := by grind [s.currentIdx_eq_next_vals] }
+    currentIdx_eq_vals_size := by grind [s.currentIdx_eq_vals_size] }
 
 abbrev ImportFlowRefT (κ) [BEq κ] [Hashable κ] (γ) (m : Type → Type)
     {ω : outParam Type} [STWorld ω m] :=
@@ -368,7 +368,7 @@ def addForAllKeysOfImports
     let j := env.getModuleIdx! imp.module
     addForAllSourceKeysM j (add j imp)
 
-@[inline] def addProjectRootValOfImport (j : ModuleIdx)
+@[inline] def addValOfParticipating (j : ModuleIdx)
     (jVal? tgtVal? : Option Preceding) : Option Preceding :=
   -- If the key is `.anonymous` or the root of `j`, then include `j`.
   -- Else, copy over `j`'s priors.
@@ -416,35 +416,50 @@ We want prevs by root. So for each module, we have its root, and for each import
 --           flows := flows ++ keys.map ((j,·))
 --   return flows
 
+@[specialize allFilter leagues]
 protected def initStateWithPrecedingM (env : Environment)
     {m} [Monad m]
-    [MonadStateOf (KeyStore Name) m] [MonadStateOf (ImportFlowState Name Preceding) m] :
+    [MonadStateOf (KeyStore Name) m] [MonadStateOf (ImportFlowState Name Preceding) m]
+    (allFilter : ModuleIdx → EffectiveImport → Bool :=
+      fun _ imp => !(`Init).isPrefixOf imp.module)
+    (leagues : ModuleIdx → EffectiveImport → Array Name :=
+      fun _ imp => #[imp.module.getRoot]) :
     m Lake.Shake.State := do
   let mut s : Lake.Shake.State := { env, transDeps := Array.mkEmpty env.header.moduleData.size }
   for i in 0...env.header.moduleData.size do
     let mod := env.header.moduleData[i]!
     let mut transImps := Needs.empty
-    let modName := env.header.modules[i]!.module
-    MonadImportFlow.setCurrentVal modName.getRoot { participating := true : Preceding }
-    MonadImportFlow.setCurrentVal Name.anonymous { participating := true : Preceding }
+    let modData := env.header.modules[i]!
+    if allFilter i modData then
+      MonadImportFlow.setCurrentVal Name.anonymous { participating := true : Preceding }
+    for league in leagues i modData do
+      MonadImportFlow.setCurrentVal league { participating := true : Preceding }
     for imp in mod.imports do
       let j := env.getModuleIdx! imp.module
       transImps := addTransitiveImps transImps imp j s.transDeps[j]!
-      addForAllSourceKeysM j (fun _ : Name => addProjectRootValOfImport j)
+      addForAllSourceKeysM j (fun _ : Name => addValOfParticipating j)
     s := { s with transDeps := s.transDeps.push transImps }
     ImportFlowState.next Name Preceding
   return s
 
 def Shake.StateWithPreceding := ImportGraph.State Name Preceding
 
-protected def initStateWithPrecedingIO (env : Environment) :
+@[inline] protected def initStateWithPrecedingIO (env : Environment)
+    (allFilter : ModuleIdx → EffectiveImport → Bool :=
+      fun _ imp => !(`Init).isPrefixOf imp.module)
+    (leagues : ModuleIdx → EffectiveImport → Array Name :=
+      fun _ imp => #[imp.module.getRoot]) :
     BaseIO Shake.StateWithPreceding := do
-  let ((s, flow), keys) ← ImportFlowRefT.run do initStateWithPrecedingM env
+  let ((s, flow), keys) ← ImportFlowRefT.run do initStateWithPrecedingM env allFilter leagues
   return { s with toKeyStore := keys, vals := flow.vals }
 
-protected def initStateWithPreceding (env : Environment) :
+@[inline] protected def initStateWithPreceding (env : Environment)
+    (allFilter : ModuleIdx → EffectiveImport → Bool :=
+      fun _ imp => !(`Init).isPrefixOf imp.module)
+    (leagues : ModuleIdx → EffectiveImport → Array Name :=
+      fun _ imp => #[imp.module.getRoot]) :
     Shake.StateWithPreceding := Id.run do
-  let ((s, flow), keys) ← ImportFlowT.run do initStateWithPrecedingM env
+  let ((s, flow), keys) ← ImportFlowT.run do initStateWithPrecedingM env allFilter leagues
   return { s with toKeyStore := keys, vals := flow.vals }
 
 
