@@ -115,6 +115,9 @@ structure KeyStore (α : Type) [BEq α] [Hashable α] where
   store : Std.HashMap α Nat := {}
   ofIdx : Array α := #[]
 
+def KeyStore.getIdxOf? {α} [BEq α] [Hashable α] (keys : KeyStore α) (a : α) : Option Nat :=
+  keys.store.get? a
+
 def KeyStore.getIdxOf {m} {α} [BEq α] [Hashable α] [Monad m] [MonadState (KeyStore α) m] (a : α) :
     m Nat := do
   -- TODO: consider getThenInsertIfNew
@@ -130,26 +133,25 @@ def KeyStore.getIdxOf {m} {α} [BEq α] [Hashable α] [Monad m] [MonadState (Key
   -- TODO: consider getThenInsertIfNew
   return (← get).ofIdx[keyIdx]?
 
-def KeyedArray (γ) := Array (Option γ)
-deriving Inhabited
+abbrev KeyedArray (γ) := Array (Option γ)
 
 def KeyedArray.get? {γ} (arr : KeyedArray γ) (i : Nat) : Option γ :=
-  if h : i < arr.size then (id arr : Array _)[i] else none
+  if h : i < arr.size then arr[i] else none
 
 def KeyedArray.get?' {γ} (arr : KeyedArray γ) (i : Nat) : Option γ :=
-  (id arr : Array _)[i]?.join
+  arr[i]?.join
 
 def KeyedArray.alter {γ} (arr : KeyedArray γ) (i : Nat) (f : Option γ → Option γ) :=
   match compare i arr.size with
   | .lt => arr.modify i f
   | .eq => arr.push (f none)
-  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size) none |>.push (f none)
+  | .gt => arr ++ Array.replicate (i - arr.size) none |>.push (f none)
 
 nonrec def KeyedArray.set! {γ} (arr : KeyedArray γ) (i : Nat) (val : γ) :=
   match compare i arr.size with
   | .lt => arr.set! i val
   | .eq => arr.push val
-  | .gt => (id arr : Array _) ++ Array.replicate (i - arr.size) none |>.push val
+  | .gt => arr ++ Array.replicate (i - arr.size) none |>.push val
 
 def KeyedArray.mkEmptyForIdxs (keyIdxs : Array Nat) :
     KeyedArray γ :=
