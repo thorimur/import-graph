@@ -33,10 +33,15 @@ meta section
 
 * `display`: if `some s`, render `s` as the label of a clickable link; if `none`,
   render just a copy icon.
-* `copyText`: the string written to the clipboard on click. -/
+* `copyText`: the string written to the clipboard on click.
+* `hasIcon`: whether to show the copy/check codicon. Only consulted when `display`
+  is `some`; with `display := none` the icon *is* the button, so it always shows.
+  Note that with `hasIcon := false` there is no in-place copy→check feedback —
+  only the hover `title` changes. -/
 public structure CopyProps where
   display  : Option String := none
   copyText : String
+  hasIcon  : Bool := true
   deriving Server.RpcEncodable
 
 /-! ## The widget -/
@@ -49,7 +54,7 @@ private def copyJs : String := "
   import * as React from 'react'
   const h = React.createElement
 
-  export default function ({ display, copyText }) {
+  export default function ({ display, copyText, hasIcon }) {
     const [copied, setCopied] = React.useState(false)
     const timer = React.useRef(null)
 
@@ -69,9 +74,11 @@ private def copyJs : String := "
     if (display == null)
       return h('a', { onClick, title, className: 'link pointer dim ' + icon })
 
-    // Leading codicon (flips copy → check in place) followed by the link text.
+    // Link text, optionally preceded by the codicon (flips copy → check in place).
     return h('a', { onClick, title, className: 'link pointer dim' },
-      h('span', { className: 'font-codicon ' + icon }), ' ', display)
+      hasIcon && h('span', { className: 'font-codicon ' + icon }),
+      hasIcon && ' ',
+      display)
   }
 "
 
@@ -81,6 +88,14 @@ public def Copy : Widget.Module where
 
 /-! ## Producing a `MessageData` widget -/
 
+public inductive DisplayText where
+| text (s : String) (hasIcon := true)
+| iconOnly
+| copiedText (hasIcon := true)
+
+instance : Coe String DisplayText where
+  coe s := .text s
+
 /-- Build a `MessageData` widget that copies `copyText` to the clipboard when
 clicked.
 
@@ -88,9 +103,13 @@ clicked.
 * `display := none` renders a copy icon.
 
 Use as e.g. `logInfo <| ← displayCopy "<thing>" (display := "click to copy")`. -/
-public def displayCopy (copyText : String) (display : Option String := none) :
+public def displayCopy (copyText : String) (display : DisplayText := .iconOnly) :
     CoreM MessageData := do
-  let props : CopyProps := { display, copyText }
+  let (display, hasIcon) := match display with
+    | .iconOnly => (none, true)
+    | .copiedText hasIcon => (copyText, hasIcon)
+    | .text s hasIcon => (s, hasIcon)
+  let props : CopyProps := { display, copyText, hasIcon }
   return .ofWidget
     (← Widget.WidgetInstance.ofHash Copy.javascriptHash
         (Server.RpcEncodable.rpcEncode props))
@@ -99,7 +118,7 @@ public def displayCopy (copyText : String) (display : Option String := none) :
 end
 
 run_meta do
-  logInfo m!"{← displayCopy "foooo" "a er ere"}"
+  logInfo m!"{← displayCopy "foooo" "Copy foooo"}"
 
 
 end ImportGraph.Widget
