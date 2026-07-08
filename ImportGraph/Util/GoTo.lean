@@ -7,7 +7,6 @@ module
 
 public import Lean.Server.Rpc.RequestHandling
 public meta import Lean.Widget.UserWidget
-public meta import ImportGraph.Lean.Environment
 
 open Lean
 
@@ -48,12 +47,12 @@ def GoToModuleLink : Widget.Module where
           className: 'link pointer dim',
           onClick: async () => {
             try {
-              const uri = await rs.call('getModuleUri', props.modName)
+              const uri = await rs.call('ImportGraph.getModuleUri', props.modName)
               ec.revealPosition({ uri, line: props.pos.line, character: props.pos.character })
             } catch {}
           }
         },
-        props.overrideText || props.modName)
+        props.modName)
     }
   "
 
