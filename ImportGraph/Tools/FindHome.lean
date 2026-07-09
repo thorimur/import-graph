@@ -339,6 +339,9 @@ syntax (name := oldFindHomeStx) "#find_home " ident : command
   -- unless id.raw.isMissing do
   --   discard <| liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
 
+-- instance : ToMessageData Preceding where
+--   toMessageData _ := "[p]"
+
 open ImportGraph.Widget
 open Elab Command in
 elab_rules : command
@@ -374,19 +377,30 @@ elab_rules : command
         {indentD <| .bulletedList (auxDecls.toList.map .ofConstName)}\n\
         Consider running `#find_home` on those first."
     let mainRoot := (← getMainModule).getRoot
+    let mkModLinks (mods : Array (ModuleIdx × Preceding)) : CoreM (Array MessageData) := do
+      let env ← getEnv
+      mods.mapM fun (idx, _) => do
+        let lastPos := (declNeeds.getLineInMod? env idx).elim pastEndOfFile
+          ({ line := · + 1, character := 0 })
+        mkGoToModuleLink env.header.modules[idx]!.module lastPos
+    let andItsDepsMsg := if auxDecls.isEmpty then "" else "(and its dependencies from this file) "
+    let env ← getEnv
+    logInfo m!"{minimals.toArray.map fun (a, bs) =>
+      (a, bs.map fun idx : ModuleIdx × Preceding => let idx := idx.1; env.header.modules[idx]!.module)}"
+    for (root, mods) in minimals do
+      if root == mainRoot || root.isAnonymous then continue -- handled separately; different message
+      unless mods.isEmpty do
+        let modLinks ← liftCoreM <| mkModLinks mods
+        let pkg := (← getEnv).getModulePackageByIdx? mods[0]!.1 |>.elim "core" (s!"`{·}`")
+        msgs := msgs.push m!"This command {andItsDepsMsg}can be upstreamed to `{root}` in {pkg}! \
+          Specifically:\
+          {indentD <| .bulletedList modLinks.toList}"
     if let some mods := minimals[mainRoot]? then
       unless mods.isEmpty do
-        let env ← getEnv
-        let modMsgs ← liftCoreM <| mods.mapM fun (idx, _) => do
-          let lastPos := (declNeeds.getLineInMod? env idx).elim pastEndOfFile
-            ({ line := · + 1, character := 0 })
-          mkGoToModuleLink env.header.modules[idx]!.module lastPos
-        msgs := msgs.push m!"In the current library, this command \
-          {if auxDecls.isEmpty then "" else "(and its dependencies from this file) "}\
+        let modLinks ← liftCoreM <| mkModLinks mods
+        msgs := msgs.push m!"In the current library, this command {andItsDepsMsg}\
           can be moved to:\
-          {indentD <| .bulletedList modMsgs.toList}"
-    for (root, mods) in minimals do
-      if root == mainRoot then continue
+          {indentD <| .bulletedList modLinks.toList}"
     let reducedImps := needs.reduce s.transDeps |>.toImports (← getEnv)
     -- -- TODO: remove private imports that come from `import all`
     -- let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
@@ -403,9 +417,8 @@ elab_rules : command
     let cmdRange := cmd.raw.getRangeWithTrailing?.get!
     let source := cmdRange.start.extract (← getFileMap).source cmdRange.stop |>.trimAscii
     let copySource ← liftCoreM do
-      displayCopy s!"\n{source}\n"
-        (display := .text
-          s!"[copy source{if auxDecls.isEmpty then "" else " - without dependencies"}]")
+      displayCopy s!"\n{source}\n" (display :=
+        .text s!"[copy source{if auxDecls.isEmpty then "" else " - without dependencies"}]")
     logInfo m!"{m!"\n\n".joinSep msgs.toList}\n\n{copySource}\n\n{moreInfo}"
 
 
