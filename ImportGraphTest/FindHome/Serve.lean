@@ -11,7 +11,7 @@ import ImportGraphTest.FindHome.Harness
 Each `#lake_serve` command below spawns `lake serve` in the fixture package
 `ImportGraphTest/FindHome/findHomeB`, opens the given fixture file, waits for its diagnostics, and re-logs
 them here. See `ImportGraphTest/FindHome/Harness.lean` for the harness and
-`test/README.md` for the overall design.
+`ImportGraphTest/FindHome/README.md` for the overall design.
 
 TODO(#find_home WIP): the `#guard_msgs` golden expectations are commented out below,
 since `#find_home` is still in progress. Each commented block records the *actual* output
@@ -25,8 +25,10 @@ the bare `#lake_serve` that follows it.
 
 open ImportGraph.Test.Serve
 
--- Pre-build the fixture package (this also builds `importGraph` itself and `findHomeA`
--- as path dependencies) so each `#lake_serve` below only pays server startup.
+-- Prepare the fixture packages (syncing their toolchains, regenerating their manifests,
+-- and building — which also builds `importGraph` itself as a path dependency), so each
+-- `#lake_serve` below only pays server startup.
+#lake_build "ImportGraphTest/FindHome/findHomeA"
 #lake_build "ImportGraphTest/FindHome/findHomeB"
 
 /-! ## Core algorithm: cross-package meet
@@ -36,10 +38,10 @@ Expected: upstream suggestion pointing at `FindHomeA.Meet` in package
 
 /-
 /--
-info: information @ ⟨10, 0⟩:
+info: @10:0-11:39:
 [(FindHomeA, [FindHomeA.Meet]), ([anonymous], [FindHomeA.Meet])]
 ---
-info: information @ ⟨10, 0⟩:
+info: @10:0-11:39:
 This command can be upstreamed to `FindHomeA` in `findHomeA`! Specifically:
   • FindHomeA.Meet
 
@@ -53,9 +55,9 @@ This command can be upstreamed to `FindHomeA` in `findHomeA`! Specifically:
     • crossPackage
 -/
 #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/CrossPackage.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.CrossPackage
 -/
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/CrossPackage.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.CrossPackage
 
 /-! ## In-current-library move
 
@@ -84,7 +86,7 @@ This command can be upstreamed to `FindHomeB` in `findHomeB`! Specifically:
     • inLibrary
 -/
 #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/InLibrary.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.InLibrary
 
 /-! ## Edge case: (almost) no dependencies
 
@@ -99,7 +101,7 @@ declaration's needs. The output is large and clearly wrong, so no golden is reco
 see this scenario's output via the bare `#lake_serve` below. -/
 
 -- #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/NoDeps.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.NoDeps
 
 /-! ## Edge case: auxiliary declarations from earlier in the file
 
@@ -109,10 +111,10 @@ listing `auxHelper`, with homes accounting for both declarations' needs
 
 /-
 /--
-info: information @ ⟨13, 0⟩:
+info: @13:0-14:38:
 [(FindHomeA, [FindHomeA.Meet]), ([anonymous], [FindHomeA.Meet])]
 ---
-info: information @ ⟨13, 0⟩:
+info: @13:0-14:38:
 This command depends on earlier declarations in this file:
   • auxHelper
 Consider running `#find_home` on those first.
@@ -132,9 +134,9 @@ This command (and its dependencies from this file) can be upstreamed to `FindHom
     • auxHelper
 -/
 #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/AuxDecl.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.AuxDecl
 -/
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/AuxDecl.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.AuxDecl
 
 /-! ## Edge case: mutual blocks
 
@@ -168,7 +170,7 @@ This command can be upstreamed to `FindHomeA` in `findHomeA`! Specifically:
     • mutualOdd._f
 -/
 #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/MutualBlock.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.MutualBlock
 
 /-! ## Edge case: command producing no declarations
 
@@ -184,4 +186,4 @@ warning: @7:0-7:10:
 This command did not produce any declarations.
 -/
 #guard_msgs in
-#lake_serve "ImportGraphTest/FindHome/findHomeB" "FindHomeB/NoDecls.lean"
+#lake_serve "ImportGraphTest/FindHome/findHomeB" FindHomeB.NoDecls

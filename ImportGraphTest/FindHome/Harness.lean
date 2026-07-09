@@ -15,19 +15,21 @@ import Lean.Elab.Command
 language server. Rather than building a full interactive testing framework, we take a
 golden-file approach:
 
-* fixture files live in small lake packages under `test/` (which may depend on each other,
-  and on `importGraph` itself via a relative path);
-* an orchestrating Lean file (e.g. `ImportGraphTest/FindHomeServe.lean`) uses the commands
-  below to spawn `lake serve` in a fixture package, open a file, and wait for its
-  diagnostics;
+* fixture files live in small lake packages (e.g. under `ImportGraphTest/FindHome/`)
+  which may depend on each other, and on `importGraph` itself via a relative path;
+* an orchestrating Lean file (e.g. `ImportGraphTest/FindHome/Serve.lean`) uses the
+  commands below to spawn `lake serve` in a fixture package, open a file, and wait for
+  its diagnostics;
 * the diagnostics are then re-logged in the orchestrating file, where `#guard_msgs`
   provides the golden-file comparison.
 
 The main entry points are:
 
-* `#lake_build "<pkg-dir>"` — run `lake build` in a fixture package (pre-building the
-  fixture files' imports so that the server tests are fast and deterministic);
-* `#lake_serve "<pkg-dir>" "<relative-file-path>"` — serve the given file and re-log its
+* `#lake_build "<pkg-dir>"` — sync the fixture package's `lean-toolchain` with the
+  workspace root's, run `lake update` (fixture manifests are gitignored, so they are
+  regenerated rather than going stale), and run `lake build` (pre-building the fixture
+  files' imports so that the server tests are fast and deterministic);
+* `#lake_serve "<pkg-dir>" <Module.Name>` — serve the given module and re-log its
   diagnostics.
 -/
 
@@ -148,15 +150,18 @@ def withTimeout (timeoutMs : Nat) (act : IO α) (cleanup : IO Unit) : IO α := d
   cleanup
   throw <| IO.userError s!"LSP test timed out after {timeoutMs}ms"
 
-/-- Serve `file` (relative to the package directory `pkgDir`, which is itself interpreted
-relative to the current working directory — the workspace root, under `lake build`/`serve`)
-and return its final diagnostics, formatted. -/
-def serveAndCollect (pkgDir file : System.FilePath) (timeoutMs : Nat := 300000) :
+/-- Serve the module `mod` of the package at `pkgDir` (which is interpreted relative to
+the current working directory — the workspace root, under `lake build`/`serve`) and
+return its final diagnostics. -/
+def serveAndCollect (pkgDir : System.FilePath) (mod : Name) (timeoutMs : Nat := 300000) :
     IO (Array Diagnostic) := do
   unless ← pkgDir.isDir do
     throw <| IO.userError s!"fixture package not found at `{pkgDir}` \
       (cwd: {← IO.currentDir}); paths are relative to the workspace root"
-  let path ← IO.FS.realPath (pkgDir / file)
+  let file := modToFilePath pkgDir mod "lean"
+  unless ← file.pathExists do
+    throw <| IO.userError s!"no source file for module `{mod}` at `{file}`"
+  let path ← IO.FS.realPath file
   let srv ← Server.start pkgDir
   try
     let diags ← withTimeout timeoutMs (srv.openAndAwaitDiagnostics path) srv.child.kill
@@ -168,28 +173,56 @@ def serveAndCollect (pkgDir file : System.FilePath) (timeoutMs : Nat := 300000) 
 
 open Elab Command
 
-/-- `#lake_build "<pkg-dir>"` runs `lake build` in the given fixture package, so that
-subsequent `#lake_serve` tests do not pay (possibly nondeterministic) build costs.
+/-- Overwrite the fixture package's `lean-toolchain` with the workspace root's (found via
+the cwd, which is the workspace root under `lake build`/`serve`), so that fixture
+toolchains — which are gitignored — never go stale. -/
+def syncToolchain (pkgDir : System.FilePath) : IO Unit := do
+  let rootToolchain : System.FilePath := "lean-toolchain"
+  unless ← rootToolchain.pathExists do
+    throw <| IO.userError s!"expected a `lean-toolchain` file at the workspace root \
+      (cwd: {← IO.currentDir})"
+  let toolchain ← IO.FS.readFile rootToolchain
+  let target := pkgDir / "lean-toolchain"
+  -- Avoid dirtying the file's mtime when it is already in sync.
+  unless (← target.pathExists) && (← IO.FS.readFile target) == toolchain do
+    IO.FS.writeFile target toolchain
+
+/-- Run `lake <args>` in `pkgDir` with a sanitized environment, throwing on failure. -/
+def runLake (pkgDir : System.FilePath) (args : Array String) : IO Unit := do
+  let out ← IO.Process.output {
+    cmd := "lake", args, cwd := pkgDir, env := sanitizedEnv
+  }
+  unless out.exitCode == 0 do
+    throw <| IO.userError s!"`lake {" ".intercalate args.toList}` in `{pkgDir}` failed \
+      with exit code {out.exitCode}:\n{out.stdout}\n{out.stderr}"
+
+/-- `#lake_build "<pkg-dir>"` prepares the given fixture package, so that subsequent
+`#lake_serve` tests do not pay (possibly nondeterministic) resolution and build costs:
+
+1. syncs its `lean-toolchain` with the workspace root's;
+2. runs `lake update`, regenerating its (gitignored) manifest so it cannot go stale;
+3. runs `lake build`.
+
 The path is relative to the workspace root. -/
 elab tk:"#lake_build" dir:str : command => do
   let pkgDir : System.FilePath := dir.getString
   unless ← pkgDir.isDir do
     throwErrorAt tk "fixture package not found at '{pkgDir}' \
       (cwd: {← IO.currentDir}); paths are relative to the workspace root"
-  let out ← IO.Process.output {
-    cmd := "lake", args := #["build"], cwd := pkgDir, env := sanitizedEnv
-  }
-  unless out.exitCode == 0 do
-    throwErrorAt tk "`lake build` in '{pkgDir}' failed with exit code {out.exitCode}:\n\
-      {out.stdout}\n{out.stderr}"
+  try
+    syncToolchain pkgDir
+    runLake pkgDir #["update"]
+    runLake pkgDir #["build"]
+  catch e =>
+    throwErrorAt tk (e.toMessageData)
 
-/-- `#lake_serve "<pkg-dir>" "<file>"` spawns `lake serve` in the fixture package
-`<pkg-dir>` (relative to the workspace root), opens `<file>` (relative to `<pkg-dir>`),
-waits for its diagnostics, and re-logs each of them here — so that `#guard_msgs` can be
-used as a golden-file test. Each fixture diagnostic is logged as `info` and carries its
-original severity and position in its text. -/
-elab "#lake_serve" dir:str file:str : command => do
-  let diags ← serveAndCollect dir.getString file.getString
+/-- `#lake_serve "<pkg-dir>" <Module.Name>` spawns `lake serve` in the fixture package
+`<pkg-dir>` (relative to the workspace root), opens the source file of the given module
+(relative to `<pkg-dir>`), waits for its diagnostics, and re-logs each of them here — so
+that `#guard_msgs` can be used as a golden-file test. Each logged message carries the
+fixture diagnostic's range in its text. -/
+elab "#lake_serve" dir:str mod:ident : command => do
+  let diags ← serveAndCollect dir.getString mod.getId
   if diags.isEmpty then
     logInfo "Process completed without producing messages."
   else
