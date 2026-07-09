@@ -1,7 +1,7 @@
 /-
-Copyright (c) 2026 Thomas Murrills. All rights reserved.
+Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Thomas Murrills, Claude Opus 4.8
+Authors: Thomas R. Murrills
 -/
 module
 
@@ -132,11 +132,5 @@ public def collapsibleLazy {m : Type → Type} [Monad m] [MonadLiftT CoreM m]
   collapsible summary (.ofLazyM body es) initiallyOpen
 
 end
-
-run_meta do
-  let e ← addMessageContext m!"{.ofConstName ``Bool.true}"
-  let msg ← collapsible e m!"{.ofConstName ``Nat}" false
-  let msg ← collapsible e msg false
-  logInfo msg
 
 end ImportGraph.Widget
