@@ -418,6 +418,7 @@ We want prevs by root. So for each module, we have its root, and for each import
 --           flows := flows ++ keys.map ((j,·))
 --   return flows
 
+-- TODO(NOW): `filter` is not quite right.
 -- TODO: collapse `leagues` and `allFilter` into ``leagues := fun _ imp => if (`Init).isPrefixOf imp.module then #[] else #[.anonymous, imp.module.getRoot]``? Requires people to reimplement filter...
 @[specialize filter leagues]
 protected def initStateWithPrecedingM (env : Environment)
