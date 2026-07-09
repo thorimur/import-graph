@@ -1,0 +1,16 @@
+name = "findHomeB"
+defaultTargets = ["FindHomeB"]
+# Share the outer workspace's package checkouts (in particular `Cli`, required by
+# `importGraph`) so that fixture builds do not have to re-clone git dependencies.
+packagesDir = "../../../.lake/packages"
+
+[[require]]
+name = "importGraph"
+path = "../../.."
+
+[[require]]
+name = "findHomeA"
+path = "../findHomeA"
+
+[[lean_lib]]
+name = "FindHomeB"
