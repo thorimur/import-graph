@@ -11,7 +11,7 @@ orchestrating file — where `#guard_msgs` provides the golden-file comparison.
 
 ```
 ImportGraphTest/FindHome/
-  Harness.lean          # the LSP client + the #lake_build / #lake_serve commands
+  Harness.lean          # the LSP client + the #lake_setup / #lake_serve commands
   Serve.lean            # the CI orchestrator (imported by the ImportGraphTest runner)
   findHomeA/            # fixture package: ComponentA/ComponentB with meet FindHomeA.Meet
   findHomeB/            # fixture package: depends on findHomeA; contains the served files
@@ -27,13 +27,13 @@ beyond what `importGraph` itself already requires. (They also set
 workspace instead of re-cloned.)
 
 The fixture packages' `lean-toolchain` and `lake-manifest.json` files are **gitignored
-and regenerated**: `#lake_build` copies in the workspace root's `lean-toolchain` and runs
+and regenerated**: `#lake_setup` copies in the workspace root's `lean-toolchain` and runs
 `lake update` before building, so they cannot go stale.
 
 ## CI suite
 
 The orchestrator is [`Serve.lean`](Serve.lean); it runs as part of `lake test` (via the
-`ImportGraphTest` library). It first issues `#lake_build` for the fixture packages
+`ImportGraphTest` library). It first issues `#lake_setup` for the fixture packages
 (toolchain sync + `lake update` + `lake build`), then one `#lake_serve` per scenario:
 
 | Fixture module | Scenario |
@@ -56,13 +56,13 @@ bare `#lake_serve` that follows it.
 
 Notes:
 
-* Paths passed to `#lake_build`/`#lake_serve` are relative to the workspace root (the
+* Paths passed to `#lake_setup`/`#lake_serve` are relative to the workspace root (the
   cwd both under `lake build` and in the language server); `#lake_serve` takes the module
   to serve as an identifier, resolved to a source file relative to the package directory.
 * Each logged message carries the fixture diagnostic's range in its text, so golden files
   also record positions.
 * Each `#lake_serve` has a 5-minute internal timeout, after which the server is killed
-  and the command fails. (`#lake_build` currently has no timeout.)
+  and the command fails. (`#lake_setup` currently has no timeout.)
 
 ## Personal (interactive) suite
 

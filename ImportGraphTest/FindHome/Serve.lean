@@ -28,8 +28,8 @@ open ImportGraph.Test.Serve
 -- Prepare the fixture packages (syncing their toolchains, regenerating their manifests,
 -- and building — which also builds `importGraph` itself as a path dependency), so each
 -- `#lake_serve` below only pays server startup.
-#lake_build "ImportGraphTest/FindHome/findHomeA"
-#lake_build "ImportGraphTest/FindHome/findHomeB"
+#lake_setup "ImportGraphTest/FindHome/findHomeA"
+#lake_setup "ImportGraphTest/FindHome/findHomeB"
 
 /-! ## Core algorithm: cross-package meet
 

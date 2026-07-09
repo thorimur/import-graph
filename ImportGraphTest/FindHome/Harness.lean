@@ -25,7 +25,7 @@ golden-file approach:
 
 The main entry points are:
 
-* `#lake_build "<pkg-dir>"` — sync the fixture package's `lean-toolchain` with the
+* `#lake_setup "<pkg-dir>"` — sync the fixture package's `lean-toolchain` with the
   workspace root's, run `lake update` (fixture manifests are gitignored, so they are
   regenerated rather than going stale), and run `lake build` (pre-building the fixture
   files' imports so that the server tests are fast and deterministic);
@@ -196,7 +196,7 @@ def runLake (pkgDir : System.FilePath) (args : Array String) : IO Unit := do
     throw <| IO.userError s!"`lake {" ".intercalate args.toList}` in `{pkgDir}` failed \
       with exit code {out.exitCode}:\n{out.stdout}\n{out.stderr}"
 
-/-- `#lake_build "<pkg-dir>"` prepares the given fixture package, so that subsequent
+/-- `#lake_setup "<pkg-dir>"` prepares the given fixture package, so that subsequent
 `#lake_serve` tests do not pay (possibly nondeterministic) resolution and build costs:
 
 1. syncs its `lean-toolchain` with the workspace root's;
@@ -204,7 +204,7 @@ def runLake (pkgDir : System.FilePath) (args : Array String) : IO Unit := do
 3. runs `lake build`.
 
 The path is relative to the workspace root. -/
-elab tk:"#lake_build" dir:str : command => do
+elab tk:"#lake_setup" dir:str : command => do
   let pkgDir : System.FilePath := dir.getString
   unless ← pkgDir.isDir do
     throwErrorAt tk "fixture package not found at '{pkgDir}' \
