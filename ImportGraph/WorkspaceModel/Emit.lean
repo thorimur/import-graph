@@ -29,7 +29,7 @@ import ImportGraph.WorkspaceModel.Summary
 open Lean ImportGraph Lake
 
 public def main (args : List String) : IO UInt32 := do
-  let wsDir : FilePath ← do
+  let wsDir : System.FilePath ← do
     match args with
     | [] => IO.currentDir
     | [dir] => IO.FS.realPath dir
@@ -46,10 +46,11 @@ public def main (args : List String) : IO UInt32 := do
   let cfg : LoadConfig := { lakeEnv, wsDir }
   let (ws?, log) ← (loadWorkspace cfg).run?
   if log.any (·.level matches .error) then
-    IO.eprintln s!"error: failed to load the Lake workspace at {wsDir}.\n\
-      Errors were produced. Log:\n{log}"; return 1
-  let some ws := ws? | IO.eprintln s!"error: failed to load the Lake workspace at {wsDir}.\n\
-      No workspace was returned. Log:\n{log}"; return 1
+    IO.eprintln s!"error: Errors were produced while loading the Lake workspace at {wsDir}.\n\
+      Log:\n{log}"; return 1
+  let some ws := ws?
+    | IO.eprintln s!"error: Failed to load the Lake workspace at {wsDir}.\n\
+        Log:\n{log}"; return 1
   let json := toJson (WorkspaceSummary.ofWorkspace ws)
   IO.println json.compress
   return 0

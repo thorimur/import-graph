@@ -49,7 +49,7 @@ structure LibrarySummary where
   roots : Array Name
   /-- The globs specifying the library's buildable modules. -/
   globs : Array Lake.Glob
-deriving ToJson, FromJson, Inhabited
+deriving ToJson, FromJson, Repr, Inhabited
 
 /-- One package of the workspace, as resolved by Lake. All paths are absolute. -/
 structure PackageSummary where
@@ -70,7 +70,7 @@ structure PackageSummary where
   deps : Array Nat
   /-- The package's Lean libraries. -/
   libs : Array LibrarySummary
-deriving ToJson, FromJson, Inhabited
+deriving ToJson, FromJson, Repr, Inhabited
 
 -- TODO: ensure `dir` brings us to package source.
 
@@ -83,7 +83,7 @@ structure WorkspaceSummary where
   /-- The packages of the workspace, in Lake's workspace order (root first); each
   package's position is its `lakeIdx`. -/
   packages : Array PackageSummary
-deriving ToJson, FromJson, Inhabited
+deriving ToJson, FromJson, Repr, Inhabited
 
 /-- Extract the hierarchy and path data of a loaded `Lake.Workspace`. -/
 def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) : WorkspaceSummary where
@@ -99,5 +99,31 @@ def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) : WorkspaceSummary where
       globs := lib.config.globs
     }
   }
+
+/-- The name of the executable with root `ImportGraph.WorkspaceModel.Emit`.
+Should be synchronized with the lakefile. -/
+def WorkspaceSummary.exeName : String := "import-graph-workspace-summary"
+
+/--
+Get the workspace summary by calling out to `lake exe import-graph-workspace-summary`, which emits j
+json that this function parses.
+
+This is a workaround for the fact that the language server does not load the lake shared library.
+-/
+def getWorkspaceSummary (cwd : Option FilePath := none) : IO WorkspaceSummary := do
+  let out ← IO.Process.run {
+    cmd := "lake"
+    args := #["exe", WorkspaceSummary.exeName]
+    cwd
+    /-
+    Search-path variables inherited from the spawning process (e.g. the language server) describe *its* setup and must not leak into a fresh `lake` invocation.
+    -- TODO(F): really?
+    -/
+    env := #[("LEAN_PATH", none), ("LEAN_SRC_PATH", none), ("LAKE", none)] }
+  let msgHeader := s!"Failed to get workspace summary"
+  let json ← IO.ofExcept <| Json.parse out |>.mapError
+    (s!"{msgHeader}: invalid JSON:\n{·}")
+  IO.ofExcept <| (fromJson? json : Except String WorkspaceSummary).mapError
+    (s!"{msgHeader}: malformed workspace summary JSON:\n{·}")
 
 end ImportGraph.Lake
