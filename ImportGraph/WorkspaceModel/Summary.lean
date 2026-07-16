@@ -7,6 +7,7 @@ module
 
 public import Lake.Config.Workspace
 public import Lean.Data.Json
+public import ImportGraph.WorkspaceModel.Base
 
 /-!
 # Raw workspace data
@@ -39,32 +40,10 @@ deriving instance ToJson, FromJson for Lake.Glob
 
 /-- One Lean library (`lean_lib`) of a package, as configured: its name and the rule
 (`srcDir`, `roots`, `globs`) by which its modules are found. -/
-structure LibrarySummary where
-  /-- The library's name. -/
-  name : Name
-  /-- The directory relative to which the library's module names locate source files
-  (absolute). -/
-  srcDir : FilePath
-  /-- The library's root module names. -/
-  roots : Array Name
-  /-- The globs specifying the library's buildable modules. -/
-  globs : Array Lake.Glob
-deriving ToJson, FromJson, Repr, Inhabited
+abbrev LibrarySummary := BaseLibrary
 
 /-- One package of the workspace, as resolved by Lake. All paths are absolute. -/
-structure PackageSummary where
-  /-- The package's assigned name (`Package.baseName`). -/
-  baseName : Name
-  /-- The package's original name (`Package.origName`). -/
-  origName : Name
-  /-- Lake's index for the package (`Package.wsIdx`), which is also its position in
-  `WorkspaceSummary.packages`. Together with `name`, this disambiguates packages. -/
-  wsIdx : Nat
-  /-- The package's root directory (absolute). -/
-  dir : FilePath
-  /-- The directory holding the package's compiled module artifacts (`.olean`s etc.),
-  e.g. `<dir>/.lake/build/lib/lean`. -/
-  leanLibDir : FilePath
+structure PackageSummary extends BasePackage where
   /-- The Lake indices of the package's *direct* dependencies (Lake's resolved
   `depPkgs`). -/
   deps : Array Nat
@@ -75,11 +54,7 @@ deriving ToJson, FromJson, Repr, Inhabited
 -- TODO: ensure `dir` brings us to package source.
 
 /-- The raw structural data of a Lake workspace; see the module docstring. -/
-structure WorkspaceSummary where
-  /-- The workspace root directory (absolute). -/
-  dir : FilePath
-  /-- The Lean toolchain's sysroot (absolute). -/
-  sysroot : FilePath
+structure WorkspaceSummary extends BaseWorkspace where
   /-- The packages of the workspace, in Lake's workspace order (root first); each
   package's position is its `lakeIdx`. -/
   packages : Array PackageSummary
@@ -92,12 +67,15 @@ def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) : WorkspaceSummary where
   packages := ws.packages.map fun pkg => { pkg with
     leanLibDir := pkg.leanLibDir
     deps := pkg.depPkgs.map (·.wsIdx)
-    libs := pkg.leanLibs.map fun lib => {
-      name := lib.name
-      srcDir := lib.srcDir
-      roots := lib.roots
-      globs := lib.config.globs
-    }
+    libs := pkg.leanLibs.filterMap fun lib => do
+      -- TODO: check we don't need to filter by roots instead? Probably not.
+      guard <| pkg.defaultTargets.contains lib.name
+      return {
+        name := lib.name
+        srcDir := lib.srcDir
+        roots := lib.roots
+        globs := lib.config.globs
+      }
   }
 
 /-- The name of the executable with root `ImportGraph.WorkspaceModel.Emit`.
