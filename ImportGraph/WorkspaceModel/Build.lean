@@ -49,7 +49,7 @@ open ImportGraph Lean System Lake Lake.Shake
 
 namespace ImportGraph
 
--- TODO: deduce this from core's lakefile instead of hardcoding it
+-- TODO: deduce this from core's lakefile instead of hardcoding it, ideally during `Emit`
 -- Somehow exclude "LakeMain", "LeanIR", "Leanc", "LeanChecker"? Or will these be ignored by not being above the current package?
 /-- A hardcoded list of the four libraries we want to consider in the toolchain (`Init`, `Std`, `Lean`, `Lake`) with directories relative to the `sysroot`. -/
 private def toolchainLibs (sysroot : FilePath) : Array Lake.LibrarySummary :=
@@ -190,7 +190,7 @@ def Lake.WorkspaceSummary.toWorkspaceModel (ws : WorkspaceSummary)
 
 initialize workspaceModelCache : IO.Ref (Option WorkspaceModel) ← IO.mkRef none
 
-def getWorkspaceModel (extraMods : Array Name)
+def getWorkspaceModel (extraMods : Array Name := #[])
     (useCache := true) (cwd : Option System.FilePath := none) :
     IO WorkspaceModel := do
   if useCache then if let some wm ← workspaceModelCache.get then
