@@ -11,8 +11,9 @@ namespace System.FilePath
 
 structure Modules where
   dir : System.FilePath
+  root : Name := .anonymous
 
-@[inline] def modules (dir : System.FilePath) : Modules := { dir }
+@[inline] def modules (dir : System.FilePath) (root := Name.anonymous) : Modules := { dir, root }
 
 /--
 `for (mod, dirEntry) in dir.modules` iterates over the module name corresponding to each
@@ -21,7 +22,7 @@ structure Modules where
 For example, if `dir` contains `A/B/C.lean`, the loop visits `(A.B.C, ⟨"A/B", "C.lean"⟩)`.
 -/
 partial instance [Monad m] [MonadLiftT IO m] : ForIn m Modules (Name × IO.FS.DirEntry) where
-  forIn {β} dir init f :=
+  forIn {β} spec init f :=
     let rec @[specialize f] loop (dir : System.FilePath) (pre : Name) (b : β) := do
       let mut b := b
       for entry in ← dir.readDir do
@@ -35,7 +36,7 @@ partial instance [Monad m] [MonadLiftT IO m] : ForIn m Modules (Name × IO.FS.Di
           | ForInStep.yield b' => b := b'
           | ForInStep.done b'  => return ForInStep.done b'
       return ForInStep.yield b
-    return (← loop dir.dir Name.anonymous init).value
+    return (← loop spec.dir spec.root init).value
 
 end System.FilePath
 
@@ -50,6 +51,7 @@ structure Glob.Modules where
 @[inline] def Glob.modulesIn (dir : System.FilePath) (glob : Glob) : Glob.Modules :=
   { glob, dir }
 
+#check Glob.forEachModuleIn
 /--
 `for (mod, dirEntry) in glob.modulesIn dir` iterates over the module names selected by `glob`, resolving
 submodule globs against the `.lean` files found under `dir`.
@@ -65,17 +67,17 @@ instance [Monad m] [MonadLiftT IO m] : ForIn m Glob.Modules (Name × IO.FS.DirEn
       return (← f (n, entry) init).value
     | .submodules n =>
       let modDir ← realPathNormalized <| modToFilePath dir n ""
-      forIn modDir.modules init f
+      forIn (modDir.modules (root := n)) init fun (mod, entry) b => f (n ++ mod, entry) b
     | .andSubmodules n =>
       let modFile ← realPathNormalized <| modToFilePath dir n "lean"
       let entry : IO.FS.DirEntry := {
         root := modFile.withFileName ""
         fileName := modFile.fileName.getD "" }
-      match (← f (n, entry) init) with
+      match ← f (n, entry) init with
       | ForInStep.done b => return b
       | ForInStep.yield b =>
         let modDir ← realPathNormalized <| modToFilePath dir n ""
-        forIn modDir.modules b f
+        forIn (modDir.modules (root := n)) b f
 
 namespace IO
 
