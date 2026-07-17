@@ -53,11 +53,11 @@ namespace ImportGraph
 -- Somehow exclude "LakeMain", "LeanIR", "Leanc", "LeanChecker"? Or will these be ignored by not being above the current package?
 /-- A hardcoded list of the four libraries we want to consider in the toolchain (`Init`, `Std`, `Lean`, `Lake`) with directories relative to the `sysroot`. -/
 private def toolchainLibs (sysroot : FilePath) : Array Lake.LibrarySummary :=
-  #[{ name := `Init, srcDir := sysroot / "src" / "Init" },
-    { name := `Std, srcDir := sysroot / "src" / "Std" },
-    { name := `Lean, srcDir := sysroot / "src" / "Lean"
+  #[{ name := `Init, srcDir := sysroot / "src" / "lean" / "Init" },
+    { name := `Std, srcDir := sysroot / "src" / "lean" / "Std" },
+    { name := `Lean, srcDir := sysroot / "src" / "lean" / "Lean"
       globs := #[`Lean, `Lean.Compiler.IR.EmitLLVM, `Lean.Compiler.LCNF.Probing] },
-    { name := `Lake, srcDir := sysroot / "src" / "lake"
+    { name := `Lake, srcDir := sysroot / "src" / "lean" / "lake"
       globs := #[`Lake.*] }]
 
 -- TODO: just alter `parseImports'` to account for this.
