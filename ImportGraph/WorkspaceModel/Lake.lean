@@ -67,7 +67,7 @@ instance [Monad m] [MonadLiftT IO m] : ForIn m Glob.Modules (Name × IO.FS.DirEn
       return (← f (n, modFile.toDirEntry) init).value
     | .submodules n =>
       let modDir := modToFilePath dir n ""
-      forIn (modDir.modules (root := n)) init fun (mod, entry) b => f (n ++ mod, entry) b
+      forIn (modDir.modules (root := n)) init f
     | .andSubmodules n =>
       let modFile ← realPathNormalized <| modToFilePath dir n "lean"
       match ← f (n, modFile.toDirEntry) init with
