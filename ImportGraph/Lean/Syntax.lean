@@ -1,0 +1,39 @@
+/-
+Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Thomas R. Murrills
+-/
+module
+
+-- We use `all` to access `updateLeadingAux`.
+import all Lean.Syntax
+
+public section
+
+namespace Lean
+
+/-- Like `Lean.Syntax.updateLeading`, but preserves the starting position of the syntax if it
+exists (instead of setting it to `0`). See the docstring of `updateLeading` for more details. -/
+def Syntax.updateLeadingPreservingStart : Syntax → Syntax :=
+  fun stx => (replaceM updateLeadingAux stx).run' (stx.getPos?.getD 0)
+
+@[inherit_doc Syntax.updateLeadingPreservingStart]
+def TSyntax.updateLeadingPreservingStart {ks} (stx : TSyntax ks) : TSyntax ks :=
+  ⟨stx.raw.updateLeadingPreservingStart⟩
+
+/-- Gets the leading whitespace of `.original` `SourceInfo`, or `none` if not `.original`. -/
+def SourceInfo.getLeading? : SourceInfo → Option Substring.Raw
+  | .original (leading := leading) .. => leading
+  | _ => none
+
+/-- Gets the leading whitespace of `.original` `SourceInfo`, or the empty substring if not
+`.original`. -/
+@[inline] def SourceInfo.getLeading (info : SourceInfo) : Substring.Raw :=
+  info.getLeading?.getD "".toRawSubstring
+
+/-- Gets the trailing whitespace of `.original` `SourceInfo`, or the empty substring if not
+`.original`. -/
+@[inline] def SourceInfo.getTrailing (info : SourceInfo) : Substring.Raw :=
+  info.getTrailing?.getD "".toRawSubstring
+
+end Lean
