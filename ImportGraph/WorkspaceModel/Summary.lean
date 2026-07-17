@@ -147,7 +147,6 @@ json that this function parses.
 This is a workaround for the fact that the language server does not load the lake shared library.
 -/
 def getWorkspaceSummary (wsDir : Option FilePath := none) : IO WorkspaceSummary := do
-  dbg_trace s!"current time: {← IO.monoMsNow}"
   let lakeDirPath ← lakeDirPath wsDir
   unless ← lakeDirPath.isDir do
     throw (.userError "Could not find `.lake` folder at {lakeFolderPath}")
