@@ -61,9 +61,11 @@ structure WorkspaceSummary extends BaseWorkspace where
 deriving ToJson, FromJson, Repr, Inhabited
 
 /-- Extract the hierarchy and path data of a loaded `Lake.Workspace`. -/
-def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) : WorkspaceSummary where
+def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) (version : ToolchainVer) :
+    WorkspaceSummary where
   dir := ws.dir
   sysroot := ws.lakeEnv.lean.sysroot
+  version := version
   packages := ws.packages.map fun pkg => { pkg with
     leanLibDir := pkg.leanLibDir
     deps := pkg.depPkgs.map (·.wsIdx)
@@ -78,9 +80,16 @@ def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) : WorkspaceSummary where
       }
   }
 
+def _root_.Lake.Workspace.getToolchainVer (ws : Lake.Workspace) : IO ToolchainVer := do
+  let some ver ← ToolchainVer.ofDir? ws.dir
+    | throw (.userError "Could not find toolchain file in directory.")
+  return ver
+
 /-- The name of the executable with root `ImportGraph.WorkspaceModel.Emit`.
 Should be synchronized with the lakefile. -/
 def WorkspaceSummary.exeName : String := "import-graph-workspace-summary"
+
+-- TODO: attempt to read/write from cache file
 
 /--
 Get the workspace summary by calling out to `lake exe import-graph-workspace-summary`, which emits j

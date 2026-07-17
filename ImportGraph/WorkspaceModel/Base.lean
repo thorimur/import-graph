@@ -7,6 +7,7 @@ module
 
 public import Lake.Config.Glob
 public import Lean.Data.Json
+public import Lake.Util.Version
 
 /-!
 # Raw workspace data
@@ -46,9 +47,9 @@ structure BaseLibrary where
   (absolute). -/
   srcDir : FilePath
   /-- The library's root module names. -/
-  roots : Array Name
+  roots : Array Name := #[name]
   /-- The globs specifying the library's buildable modules. -/
-  globs : Array Lake.Glob
+  globs : Array Lake.Glob := #[name]
 deriving ToJson, FromJson, Repr, BEq, Inhabited
 
 /-- One package of the workspace, as resolved by Lake. All paths are absolute. -/
@@ -68,7 +69,22 @@ structure BasePackage where
   leanLibDir : FilePath
 deriving ToJson, FromJson, Repr, BEq, Inhabited
 
--- TODO: ensure `dir` brings us to package source.
+def toolchainBaseName := `toolchain
+
+@[inline] def ToolchainVer.toToolchainName (ver : ToolchainVer) :=
+  Name.str toolchainBaseName ver.toString
+
+@[inline] def isToolchainName (n : Name) :=
+  match n with | .str base _ => base == toolchainBaseName | _ => false
+
+@[inline] def versionOfToolchainName? (n : Name) : Option ToolchainVer :=
+  match n with
+  | .str base ver => do
+    guard <| base == toolchainBaseName
+    ToolchainVer.ofString ver
+  | _ => none
+
+deriving instance Inhabited for ToolchainVer
 
 /-- The raw structural data of a Lake workspace; see the module docstring. -/
 structure BaseWorkspace where
@@ -76,4 +92,6 @@ structure BaseWorkspace where
   dir : FilePath
   /-- The Lean toolchain's sysroot (absolute). -/
   sysroot : FilePath
+  /-- The Lean toolchain's version. -/
+  version : ToolchainVer
 deriving ToJson, FromJson, Repr, BEq, Inhabited
