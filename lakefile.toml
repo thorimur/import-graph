@@ -34,7 +34,7 @@ name = "ImportGraphTest"
 
 # Emits the packages and lean libraries of a lake workspace as json in a manner suitable for 
 # deducing their hierarchical structure and inspecting all modules in source.
-# Works around the fact that the lake shared library is not loaded in the language server.
+# Works around the fact that loading the lake workspace in the language server crashes it.
 [[lean_exe]]
 name = "import-graph-workspace-summary"
 root = "ImportGraph.WorkspaceModel.Emit"
