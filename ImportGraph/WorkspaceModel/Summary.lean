@@ -58,14 +58,43 @@ structure WorkspaceSummary extends BaseWorkspace where
   /-- The packages of the workspace, in Lake's workspace order (root first); each
   package's position is its `lakeIdx`. -/
   packages : Array PackageSummary
+  /-- The hash of inputs to this workspace summary: the lakefile, the lake manifest, and the
+  toolchain version. -/
+  inputHash : Hash
 deriving ToJson, FromJson, Repr, Inhabited
 
+deriving instance Hashable for SemVerCore
+deriving instance Hashable for StdVer
+deriving instance Hashable for LeanVer
+deriving instance Hashable for Date
+deriving instance Hashable for ToolchainVer
+
+def _root_.Lake.Workspace.getToolchainVer (ws : Lake.Workspace) : IO ToolchainVer := do
+  let some ver ← ToolchainVer.ofDir? ws.dir
+    | throw (.userError s!"Could not find toolchain file in {ws.dir}")
+  return ver
+
+def computeSummaryInputHash (ver : ToolchainVer)
+    (manifestFile rootConfigFile : System.FilePath) : IO Hash := do
+  let hash := Hash.ofHashable ver
+  let hash := hash.mix <|← Hash.ofText <$> IO.FS.readFile manifestFile
+  return hash.mix <|← Hash.ofText <$> IO.FS.readFile rootConfigFile
+
+def WorkspaceSummary.isUpToDate (ws : WorkspaceSummary) : IO Bool := do
+  let some newVer ← ToolchainVer.ofDir? ws.dir
+    | throw (.userError s!"Could not find toolchain file in {ws.dir}")
+  let newHash ← computeSummaryInputHash newVer ws.manifestFile ws.rootConfigFile
+  return newHash == ws.inputHash
+
 /-- Extract the hierarchy and path data of a loaded `Lake.Workspace`. -/
-def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) (version : ToolchainVer) :
-    WorkspaceSummary where
+def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace)
+    (version : ToolchainVer) (inputHash : Hash) : WorkspaceSummary where
   dir := ws.dir
   sysroot := ws.lakeEnv.lean.sysroot
   version := version
+  inputHash
+  manifestFile := ws.manifestFile
+  rootConfigFile := ws.root.configFile
   packages := ws.packages.map fun pkg => { pkg with
     leanLibDir := pkg.leanLibDir
     deps := pkg.depPkgs.map (·.wsIdx)
@@ -80,16 +109,36 @@ def WorkspaceSummary.ofWorkspace (ws : Lake.Workspace) (version : ToolchainVer) 
       }
   }
 
-def _root_.Lake.Workspace.getToolchainVer (ws : Lake.Workspace) : IO ToolchainVer := do
-  let some ver ← ToolchainVer.ofDir? ws.dir
-    | throw (.userError "Could not find toolchain file in directory.")
-  return ver
-
 /-- The name of the executable with root `ImportGraph.WorkspaceModel.Emit`.
 Should be synchronized with the lakefile. -/
 def WorkspaceSummary.exeName : String := "import-graph-workspace-summary"
 
--- TODO: attempt to read/write from cache file
+-- TODO: surely this must be somewhere
+def lakeDirPath (wsDir : Option FilePath) : IO System.FilePath :=
+  return (← wsDir.getDM IO.currentDir) / ".lake"
+
+def importGraphBuildDirPath (lakeFolderPath : System.FilePath) : System.FilePath :=
+  lakeFolderPath / "importGraph"
+
+def cachePath (importGraphBuildDirPath : System.FilePath) : System.FilePath :=
+  importGraphBuildDirPath / "workspace-summary.json"
+
+open System (FilePath)
+
+-- TODO: think about this more, this is from claude.
+/-- Atomically write `content` to `path` via a sibling temp file + rename. -/
+def atomicWriteFileViaTempSibling (path : FilePath) (content : String) : IO Unit := do
+  let dir := path.parent.getD "."
+  IO.FS.createDirAll dir
+  -- Unique temp name IN THE SAME DIRECTORY, so the rename stays on one filesystem.
+  let stamp ← IO.monoNanosNow
+  let tmp := dir / s!"{path.fileName.getD "cache"}.{stamp}.tmp"
+  try
+    IO.FS.writeFile tmp content   -- open, write, deterministic close+flush
+    IO.FS.rename tmp path         -- atomic same-fs replace
+  catch e =>
+    try IO.FS.removeFile tmp catch _ => pure ()  -- best-effort cleanup
+    throw e
 
 /--
 Get the workspace summary by calling out to `lake exe import-graph-workspace-summary`, which emits j
@@ -97,18 +146,35 @@ json that this function parses.
 
 This is a workaround for the fact that the language server does not load the lake shared library.
 -/
-def getWorkspaceSummary (cwd : Option FilePath := none) : IO WorkspaceSummary := do
-  let out ← IO.Process.run {
+def getWorkspaceSummary (wsDir : Option FilePath := none) : IO WorkspaceSummary := do
+  dbg_trace s!"current time: {← IO.monoMsNow}"
+  let lakeDirPath ← lakeDirPath wsDir
+  unless ← lakeDirPath.isDir do
+    throw (.userError "Could not find `.lake` folder at {lakeFolderPath}")
+  let importGraphBuildDirPath := importGraphBuildDirPath lakeDirPath
+  let cachePath := cachePath importGraphBuildDirPath
+  if ← cachePath.pathExists then
+    let ws ← jsonOfString s!"Failed to get workspace summary from cache file at {cachePath}"
+      (← IO.FS.readFile cachePath)
+    if ← ws.isUpToDate then
+      return ws
+  let { stdout := out, stderr, exitCode } ← IO.Process.output {
     cmd := "lake"
     args := #["exe", WorkspaceSummary.exeName]
-    cwd
+    cwd := wsDir
     /-
     Search-path variables inherited from the spawning process (e.g. the language server) describe *its* setup and must not leak into a fresh `lake` invocation.
     -- TODO(F): really?
     -/
     env := #[("LEAN_PATH", none), ("LEAN_SRC_PATH", none), ("LAKE", none)] }
-  let msgHeader := s!"Failed to get workspace summary"
-  let json ← IO.ofExcept <| Json.parse out |>.mapError
+  if exitCode != 0 then throw (.userError "broke!")
+  dbg_trace s!"Logs:{stderr}"
+  -- Note: `.lake` is expected to still exist from the earlier check
+  IO.FS.createDirAll importGraphBuildDirPath
+  atomicWriteFileViaTempSibling cachePath out -- TODO: potentially do this more...atomically?
+  jsonOfString "Failed to get workspace summary" out
+where jsonOfString msgHeader str : IO WorkspaceSummary := do
+  let json ← IO.ofExcept <| Json.parse str |>.mapError
     (s!"{msgHeader}: invalid JSON:\n{·}")
   IO.ofExcept <| (fromJson? json : Except String WorkspaceSummary).mapError
     (s!"{msgHeader}: malformed workspace summary JSON:\n{·}")

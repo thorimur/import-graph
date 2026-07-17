@@ -94,4 +94,9 @@ structure BaseWorkspace where
   sysroot : FilePath
   /-- The Lean toolchain's version. -/
   version : ToolchainVer
+  /-- The path to the lake manifest. Should be uniform, but is allowed to change in lake internals,
+  so just in case. -/
+  manifestFile : System.FilePath
+  /-- The lakefile of the root package. -/
+  rootConfigFile : FilePath
 deriving ToJson, FromJson, Repr, BEq, Inhabited

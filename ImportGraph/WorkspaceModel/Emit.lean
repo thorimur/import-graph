@@ -52,6 +52,7 @@ public def main (args : List String) : IO UInt32 := do
     | IO.eprintln s!"error: Failed to load the Lake workspace at {wsDir}.\n\
         Log:\n{log}"; return 1
   let ver ← ws.getToolchainVer
-  let json := toJson (WorkspaceSummary.ofWorkspace ws ver)
+  let hash ← computeSummaryInputHash ver ws.manifestFile ws.root.configFile
+  let json := toJson (WorkspaceSummary.ofWorkspace ws ver hash)
   IO.println json.compress
   return 0
