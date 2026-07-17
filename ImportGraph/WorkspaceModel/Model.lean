@@ -10,6 +10,7 @@ import all ImportGraph.Shake.Basic
 import ImportGraph.WorkspaceModel.Base
 import all ImportGraph.WorkspaceModel.Daglike
 import Lean
+public import Lean.Data.Json.FromToJson.Basic
 
 /-!
 # The workspace model: three daglikes
@@ -73,11 +74,11 @@ module docstring). All paths are absolute.
 structure Package extends BasePackage where
   /-- Arrows: the package's *direct* dependencies, as resolved by Lake (plus the
   toolchain pseudo-package). Transitive: `WorkspaceModel.pkgTransDeps`. -/
-  deps : PackageBitset := ∅
+  deps : PackageBitset
   /-- Relational: the libraries belonging to the package. -/
-  libs : LibraryBitset := ∅
+  libs : LibraryBitset
   /-- Relational: the modules belonging to the package (the union over `libs`). -/
-  mods : ModuleBitset := ∅
+  mods : ModuleBitset
 deriving Repr, BEq, Inhabited
 
 /--
@@ -85,14 +86,15 @@ One Lean library of the model, including the pseudo-libraries `Init`/`Std`/`Lean
 of the toolchain pseudo-package.
 -/
 structure Library extends BaseLibrary where
+  -- TODO: revealedPkgDeps?
   /-- Arrows: the libraries whose modules this library's modules *directly* import —
   inferred from module imports during construction, so empty for libraries that were not
   enumerated. Not necessarily acyclic: two libraries' modules can interleave even though
   the module graph is a dag. Transitive: `WorkspaceModel.libTransDeps`. -/
-  deps : LibraryBitset := ∅
+  revealedDeps : LibraryBitset
   /-- Relational: the enumerated modules contained *in* the library (found on disk under
   its `roots`/`globs`) — not everything that gets built when the library is built. -/
-  mods : ModuleBitset := ∅
+  mods : ModuleBitset
   /-- Relational: the package the library belongs to. -/
   pkgIdx : PkgIdx
 deriving Repr, BEq, Inhabited
@@ -102,24 +104,24 @@ One module of the model. Modules enter the model by enumerating the source trees
 chosen set of libraries (see `ImportGraph.WorkspaceModel.Build`); imports of modules
 outside that enumeration remain visible in `imports` but have no bits anywhere.
 -/
-structure Module where
+structure Module extends ModuleHeader where
   /-- The module's name. -/
   name : Name
   /-- The module's source file (absolute). -/
   srcFile : FilePath
-  /-- Whether the module participates in the module system. -/
-  isModule : Bool
   /-- Whether the module has the `prelude` keyword (and hence no implicit `Init`
   imports). -/
   isPrelude : Bool
-  /-- Read from the file. -/
-  imports : Array Import
   -- /-- Arrows: `imports` as a `Needs`. -/
   -- deps : Needs := .empty
   /-- Arrows: Transitive dependencies in the module system.  -/
-  transDeps : Needs := .empty
+  transDeps : Needs
   /-- Arrows: Every module that must be built before the current module. -/
-  prevs : ModuleBitset := ∅
+  prevs : ModuleBitset
+  /-- The transitively reachable libraries this depends on. -/
+  transLibDeps : LibraryBitset
+  /-- The transitively reachable packages this depends on. -/
+  transPkgDeps : PackageBitset
   /-- Relational: The library this module belongs to. -/
   libIdx : LibIdx
   -- TODO: technically we can get this from the library.
@@ -130,6 +132,20 @@ structure Module where
 deriving Inhabited
 
 end WorkspaceModel
+
+-- TODO: move
+public instance : ToJson UInt32 where
+  toJson uint := uint.toNat
+
+public instance : FromJson UInt32 where
+  fromJson? uint := fromJson? (α := Nat) uint |>.map .ofNat
+
+deriving instance ToJson, FromJson, Repr for IO.Error
+
+inductive WorkspaceModel.Error where
+  | readImportsFailure (mod : Name) (modPath : System.FilePath) (ioError : IO.Error) : Error
+  | noLibOfModule (mod : Name)
+deriving Repr, Inhabited, ToJson, FromJson
 
 /-- The elaborated, bitset-form view of a workspace; see the module docstring. Build one
 with `WorkspaceModel.load` (or `WorkspaceModel.ofRaw`) from `ImportGraph.WorkspaceModel.Build`. -/
@@ -148,11 +164,11 @@ structure WorkspaceModel extends BaseWorkspace where
   -- TODO: eeeehhh, really, they probably shouldn't be in the module.
   -- /-- Modules whose source could not be read or whose header could not be parsed, with
   -- the error message. (Such modules stay in the model, with empty `imports`.) -/
-  -- errors : Array (Nat × String) := #[]
+  errors : Array WorkspaceModel.Error := #[]
   -- TODO: don't need this yet, nice in the future
   -- /-- Cache: the transpose of the module import dag (see `importedBy`). -/
   -- exported? : Option (Array ModuleBitset) := none
-  /-- Cache: module depths per library. Note that we can't  -/
+  /-- Cache: module depths per library. Built incrementally. -/
   modDepths : Std.HashMap (Name × LibIdx) Nat := {}
   /-- Cache: transitive package dependencies (see `pkgTransDeps`). -/
   pkgTransDeps? : Option (Array PackageBitset) := none
@@ -188,9 +204,17 @@ unique across packages, so we ask for the package index as well.) -/
 @[inline] def getLibIdx? (pkgIdx : PkgIdx) (libName : Name) : Option LibIdx :=
   m.libs.findIdx? fun lib => lib.pkgIdx == pkgIdx && lib.name == libName
 
-@[inline] def libOfMod! (mod : Module) : Library := m.libs[mod.libIdx]!
-@[inline] def pkgOfMod! (mod : Module) : Package := m.packages[mod.pkgIdx]!
-@[inline] def pkgOfLib! (lib : Library) : Package := m.packages[lib.pkgIdx]!
+@[inline] def getMod! (modIdx : ModIdx) : Module  := m.mods[modIdx]!
+@[inline] def getLib! (libIdx : LibIdx) : Library := m.libs[libIdx]!
+@[inline] def getPkg! (pkgIdx : PkgIdx) : Package := m.packages[pkgIdx]!
+
+@[inline] def libOfMod! (mod : Module) : Library := m.getLib! mod.libIdx
+@[inline] def pkgOfMod! (mod : Module) : Package := m.getPkg! mod.pkgIdx
+@[inline] def pkgOfLib! (lib : Library) : Package := m.getPkg! lib.pkgIdx
+
+@[inline] def libIdxOfModIdx! (modIdx : ModIdx) : LibIdx := m.getMod! modIdx |>.libIdx
+@[inline] def pkgIdxOfModIdx! (modIdx : ModIdx) : PkgIdx := m.getMod! modIdx |>.pkgIdx
+@[inline] def pkgIdxOfLibIdx! (libIdx : LibIdx) : PkgIdx := m.getLib! libIdx |>.pkgIdx
 
 /-! ## Lake lifts -/
 
@@ -198,11 +222,23 @@ unique across packages, so we ask for the package index as well.) -/
 def Library.isLocalModule (l : Library) (mod : Name) : Bool :=
   l.roots.any (·.isPrefixOf mod) || l.globs.any (·.matches mod)
 
+def rawLibIdxOfMod? (libs : Array WorkspaceModel.Library) (mod : Name) : Option LibIdx :=
+  libs.findIdx? (·.isLocalModule mod)
+
+@[inline] def libIdxOfMod? (mod : Name) : Option LibIdx :=
+  m.libs.findIdx? (·.isLocalModule mod)
+
 /-- Like `Lake.Module.leanLibFile`, but for `WorkspaceModel.Module`. -/
-def Module.leanLibFile (m : WorkspaceModel) (mod : Module) (ext : String) : FilePath :=
+def Module.leanLibFile (mod : Module) (ext : String) : FilePath :=
   modToFilePath (m.pkgOfMod! mod).leanLibDir mod.name ext
 
-def Module.srcPath (m : WorkspaceModel) (mod : Module) : FilePath :=
+def Library.srcPathOfMod (lib : Library) (mod : Name) : FilePath :=
+  modToFilePath lib.srcDir mod "lean"
+
+def srcPathOfMod? (mod : Name) : Option FilePath :=
+  m.libIdxOfMod? mod |>.map (modToFilePath m.libs[·]!.srcDir mod "lean")
+
+def Module.srcPath (mod : Module) : FilePath :=
   modToFilePath (m.libOfMod! mod).srcDir mod.name "lean"
 
 
