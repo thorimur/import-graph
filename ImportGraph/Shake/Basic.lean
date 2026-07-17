@@ -62,6 +62,24 @@ protected def Bitset.forIn {m} [Monad m] {β : Type} (s : Bitset) (init : β)
 instance {m} [Monad m] : ForIn m Bitset Nat where
   forIn := Bitset.forIn
 
+deriving instance ToJson, FromJson for Bitset
+
+instance : ToFormat Bitset where
+  format b := f!"{String.ofList <| Nat.toDigits 2 b.toNat}"
+
+def Bitset.ofArray (idxs : Array Nat) : Bitset := Id.run do
+  let mut b := ∅
+  for idx in idxs do
+    b := b ∪ {idx}
+  return b
+
+/-- The set `{0, ..., n - 1}`, i.e. the full index set of an enumeration of size `n`. -/
+def Bitset.univ (n : Nat) : Bitset := ⟨(1 <<< n) - 1⟩
+
+/-- The set `s` without the element `i`. -/
+def Bitset.erase (s : Bitset) (i : Nat) : Bitset :=
+  if s.has i then s ^^^ {i} else s
+
 end bitset
 
 section needs
