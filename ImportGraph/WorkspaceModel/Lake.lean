@@ -38,6 +38,10 @@ partial instance [Monad m] [MonadLiftT IO m] : ForIn m Modules (Name × IO.FS.Di
       return ForInStep.yield b
     return (← loop spec.dir spec.root init).value
 
+def toDirEntry (path : System.FilePath) : IO.FS.DirEntry where
+  root := path.withFileName ""
+  fileName := path.fileName.getD ""
+
 end System.FilePath
 
 namespace Lake
@@ -51,7 +55,6 @@ structure Glob.Modules where
 @[inline] def Glob.modulesIn (dir : System.FilePath) (glob : Glob) : Glob.Modules :=
   { glob, dir }
 
-#check Glob.forEachModuleIn
 /--
 `for (mod, dirEntry) in glob.modulesIn dir` iterates over the module names selected by `glob`, resolving
 submodule globs against the `.lean` files found under `dir`.
@@ -61,22 +64,16 @@ instance [Monad m] [MonadLiftT IO m] : ForIn m Glob.Modules (Name × IO.FS.DirEn
     match glob with
     | .one n =>
       let modFile ← realPathNormalized <| modToFilePath dir n "lean"
-      let entry : IO.FS.DirEntry := {
-        root := modFile.withFileName ""
-        fileName := modFile.fileName.getD "" }
-      return (← f (n, entry) init).value
+      return (← f (n, modFile.toDirEntry) init).value
     | .submodules n =>
-      let modDir ← realPathNormalized <| modToFilePath dir n ""
+      let modDir := modToFilePath dir n ""
       forIn (modDir.modules (root := n)) init fun (mod, entry) b => f (n ++ mod, entry) b
     | .andSubmodules n =>
       let modFile ← realPathNormalized <| modToFilePath dir n "lean"
-      let entry : IO.FS.DirEntry := {
-        root := modFile.withFileName ""
-        fileName := modFile.fileName.getD "" }
-      match ← f (n, entry) init with
+      match ← f (n, modFile.toDirEntry) init with
       | ForInStep.done b => return b
       | ForInStep.yield b =>
-        let modDir ← realPathNormalized <| modToFilePath dir n ""
+        let modDir := modToFilePath dir n ""
         forIn (modDir.modules (root := n)) b f
 
 namespace IO
