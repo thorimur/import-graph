@@ -157,7 +157,7 @@ def getWorkspaceSummary (wsDir : Option FilePath := none) : IO WorkspaceSummary 
       (← IO.FS.readFile cachePath)
     if ← ws.isUpToDate then
       return ws
-  let { stdout := out, stderr, exitCode } ← IO.Process.output {
+  let out ← IO.Process.run {
     cmd := "lake"
     args := #["exe", WorkspaceSummary.exeName]
     cwd := wsDir
@@ -166,8 +166,6 @@ def getWorkspaceSummary (wsDir : Option FilePath := none) : IO WorkspaceSummary 
     -- TODO(F): really?
     -/
     env := #[("LEAN_PATH", none), ("LEAN_SRC_PATH", none), ("LAKE", none)] }
-  if exitCode != 0 then throw (.userError "broke!")
-  dbg_trace s!"Logs:{stderr}"
   -- Note: `.lake` is expected to still exist from the earlier check
   IO.FS.createDirAll importGraphBuildDirPath
   atomicWriteFileViaTempSibling cachePath out -- TODO: potentially do this more...atomically?
