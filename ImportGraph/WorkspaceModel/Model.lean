@@ -11,6 +11,7 @@ import ImportGraph.WorkspaceModel.Base
 import all ImportGraph.WorkspaceModel.Daglike
 import Lean
 public import Lean.Data.Json.FromToJson.Basic
+public import Lean.Setup -- only for `BEq` on `ModuleHeader`...
 
 /-!
 # The workspace model: three daglikes
@@ -49,6 +50,9 @@ Note: this module must be imported via `import all`.
 -/
 
 open Lean System ImportGraph Lake Lake.Shake
+
+-- TODO: move
+deriving instance BEq for ModuleHeader
 
 namespace ImportGraph
 
@@ -129,7 +133,7 @@ structure Module extends ModuleHeader where
   convenience. -/
   pkgIdx : PkgIdx
   -- TODO: some more data on library and package?
-deriving Inhabited
+deriving Repr, BEq, Inhabited
 
 end WorkspaceModel
 
@@ -174,7 +178,7 @@ structure WorkspaceModel extends BaseWorkspace where
   pkgTransDeps? : Option (Array PackageBitset) := none
   /-- Cache: transitive library dependencies (see `libTransDeps`). -/
   libTransDeps? : Option (Array LibraryBitset) := none
-deriving Inhabited
+deriving Repr, Inhabited
 
 namespace WorkspaceModel
 
