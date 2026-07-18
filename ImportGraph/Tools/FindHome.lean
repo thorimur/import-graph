@@ -184,7 +184,7 @@ elab "#show_imports" ppLine cmd:command : command => do
   let (extraNeeds, declNeeds) ← withElabCommandCapturingNeeds cmd
     fun extraNeeds declNeeds _ => return (extraNeeds, declNeeds)
   let needs := extraNeeds ∪ declNeeds.fullNeeds
-  let reduced := needs.reduce transDeps |>.toImports (← getEnv)
+  let reduced := needs.reduce transDeps |>.toRawImports (← getEnv)
   logInfo m!"{declNeeds.keysArray.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
 
 def _root_.Lean.MessageData.bulletedList (msgs : List MessageData) (forceList := true) :
@@ -401,7 +401,7 @@ elab_rules : command
         msgs := msgs.push m!"In the current library, this command {andItsDepsMsg}\
           can be moved to:\
           {indentD <| .bulletedList modLinks.toList}"
-    let reducedImps := needs.reduce s.transDeps |>.toImports (← getEnv)
+    let reducedImps := needs.reduce s.transDeps |>.toRawImports (← getEnv)
     -- -- TODO: remove private imports that come from `import all`
     -- let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
     let moreInfo ← liftCoreM do

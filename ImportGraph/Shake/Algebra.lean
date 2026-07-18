@@ -70,7 +70,7 @@ scoped instance : Shake.HPostcomp Needs NeedsKind Needs where
 def _root_.Lake.Shake.Needs.addPostcompose (transDeps : Hierarchy) (n : Needs)
     (base := Needs.empty) : Needs := Id.run do
   let mut composed := base
-  for (k, i) in n do
+  for (k, i) in n.highToLow do
     composed := composed ∪ transDeps[i]! ≫ k
   composed
 
@@ -173,7 +173,7 @@ def Needs.reduce (a : Needs) (transDeps : Hierarchy) : Needs := Id.run do
   let a := a.antilinearize -- avoids unnecessary checks
   -- ensure we handle public/private first, since these may reduce meta
   for k in #[NeedsKind.pub, .priv, .metaPub, .metaPriv] do
-    for i in a.get k do -- note: traverses high to low
+    for i in a.get k |>.highToLow do -- note: traverses high to low
       if reduced.has k i then -- `(k, i)` may have been eliminated already
         reduced := reduced \ (transDeps[i]! ≫ k).linearize
   return reduced.antilinearize

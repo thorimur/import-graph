@@ -222,31 +222,31 @@ public def Grid : Widget.Module where
 open Lake Shake
 
 /-- The highest index set in any of `n`'s four bitsets, or `none` if all are empty. -/
-def _root_.Lake.Shake.Needs.highestIdx? (n : Needs) : Option Nat :=
+def _root_.Lake.Shake.Needs.max? (n : Needs) : Option Nat :=
   let combine (a b : Option Nat) : Option Nat := match a, b with
     | none, x => x
     | x, none => x
     | some a, some b => some (max a b)
-  combine (combine n.pub.highestIdx? n.priv.highestIdx?)
-          (combine n.metaPub.highestIdx? n.metaPriv.highestIdx?)
+  combine (combine n.pub.max? n.priv.max?)
+          (combine n.metaPub.max? n.metaPriv.max?)
 
 /-! ## Helpers: building grid cells from `Bitset` and `Needs` -/
 
 /-- The length to use when rendering `s`, given an optional explicit `padding`:
-`padding` if supplied, else `s.highestIdx? + 1` (or 0 if `s` is empty). -/
+`padding` if supplied, else `s.max? + 1` (or 0 if `s` is empty). -/
 private def bitsetRenderLen (s : Bitset) (padding : Option Nat) : Nat :=
-  padding.getD (s.highestIdx?.map (· + 1) |>.getD 0)
+  padding.getD (s.max?.map (· + 1) |>.getD 0)
 
 /-- The length to use when rendering `n`, given an optional explicit `padding`:
-`padding` if supplied, else `n.highestIdx? + 1` (or 0 if all of `n`'s bitsets
+`padding` if supplied, else `n.max? + 1` (or 0 if all of `n`'s bitsets
 are empty). -/
 private def needsRenderLen (n : Needs) (padding : Option Nat) : Nat :=
-  padding.getD (n.highestIdx?.map (· + 1) |>.getD 0)
+  padding.getD (n.max?.map (· + 1) |>.getD 0)
 
 /-- Build a row of `BitsetCell`s. The output array has length
 
 * `padding`, if supplied;
-* otherwise `s.highestIdx? + 1` (or `0` if `s` is empty).
+* otherwise `s.max? + 1` (or `0` if `s` is empty).
 
 The cell at index `i` is on iff `s.has i`. Its `name` is `names[i]?.getD ""`
 and `neededBy` is `neededBy[i]?.getD none`. -/
@@ -262,7 +262,7 @@ def _root_.Lake.Shake.Bitset.toBitsetCells (s : Bitset)
 /-- Build a row of `NeedsCell`s. The output array has length
 
 * `padding`, if supplied;
-* otherwise `n.highestIdx? + 1` (or `0` if all of `n`'s bitsets are empty).
+* otherwise `n.max? + 1` (or `0` if all of `n`'s bitsets are empty).
 
 Each cell's four bits come from the corresponding `NeedsKind` bitsets of `n`.
 Its `name` is `names[i]?.getD ""` and `neededBy` is `neededBy[i]?.getD none`. -/
@@ -313,7 +313,7 @@ def displayNeeds (n : Needs) (names : Array String)
 private def maxBitsetLen (rows : Array (Option String × Bitset)) : Nat := Id.run do
   let mut m := 0
   for (_, s) in rows do
-    if let some i := s.highestIdx? then
+    if let some i := s.max? then
       m := max m (i + 1)
   return m
 
@@ -321,7 +321,7 @@ private def maxBitsetLen (rows : Array (Option String × Bitset)) : Nat := Id.ru
 private def maxNeedsLen (rows : Array (Option String × Needs)) : Nat := Id.run do
   let mut m := 0
   for (_, n) in rows do
-    if let some i := n.highestIdx? then
+    if let some i := n.max? then
       m := max m (i + 1)
   return m
 
