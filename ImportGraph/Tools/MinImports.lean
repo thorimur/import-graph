@@ -63,34 +63,51 @@ def _root_.Lean.Syntax.getLeadingPos? (stx : Syntax) (canonicalOnly := false) :
     Option String.Pos.Raw :=
   stx.getHeadInfo.getLeadingPos? canonicalOnly
 
+open ImportGraph Lean
+
 elab tk:"#norm_imports" : command => do
-  unless (← getOptions).getBool `Elab.inServer do
-    throwError "`#norm_imports` can only be used interactively."
   let transDeps := (← getEnv).mkTransDeps
   let transNeeds := (← getEnv).transNeeds transDeps
   let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
   -- TODO: remove private imports that come from `import all`
   let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
   let (header, _, log) ← parseCurrentHeader
-  if log.hasErrors then return
+  if log.hasErrors then
+    -- This should be impossible.
+    throwError m!"The current imports failed to parse. Errors:\n\
+      {m!"\n".joinSep <| log.toList.map (·.data) }"
   let impsWithRefs := headerToImportRefsWithWhitespace header
-  let msg := Import.prettyWithWhitespaceFromSourceAndErrorComment reducedImps impsWithRefs
-  let str := s!"\n\n{msg.pretty}" -- Two newlines after `module`
+  let (msg, hasErrors) := Import.prettyWithSourceWhitespaceAndErrorComment reducedImps impsWithRefs
   let stxRef := mkNullNode (impsWithRefs.map (·.1.stx.raw))
-  let startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
-  -- Ensure we include any annotation after the last import
-  let stopPos := stxRef.getTrailingTailPos?.get!
-  let substr : Substring.Raw := ⟨(← getFileMap).source, startPos, stopPos⟩
-  if substr.toString == str then
+  let sourceSubstr : Substring.Raw := {
+      str := (← getFileMap).source
+      startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
+      -- Ensure we include any annotation after the last import
+      stopPos := stxRef.getTrailingTailPos?.get! }
+  let (sourceSubstr, str) :=
+    -- We want two newlines in front of the suggestion to separate it from `module`.
+    -- Either chop these off the source if we can, or add them to our new string.
+    -- Chopping off allows us to avoid unsightly whitespace at the top of the suggestion.
+    let str := msg.pretty (width := Std.Format.getWidth <|← getOptions)
+    if let some sourceSubstr := sourceSubstr.dropPrefix? "\n\n".toRawSubstring then
+      (sourceSubstr, str)
+    else
+      (sourceSubstr, s!"\n\n{str}")
+  if sourceSubstr.toString == str then
     logInfo m!"Imports are normalized."
   else
-    let e ← Elab.Command.liftCoreM <|
+    let newImports ← Elab.Command.liftCoreM <|
       -- Need `.ofRange` here to insist on overwriting trailing whitespace.
       Meta.Hint.mkSuggestionsMessage #[{
           suggestion := str
-          span? := Syntax.ofRange ⟨startPos, stopPos⟩ }]
+          span? := Syntax.ofRange ⟨sourceSubstr.startPos, sourceSubstr.stopPos⟩
+          diffGranularity := if hasErrors then .none else .word }]
         tk "Normalize imports: " false
-    logWarning m!"Imports can be normalized:{e}"
+    if hasErrors then
+      logWarning m!"Imports can be normalized, but some comments could not be carried over. \
+        Please review the following description after normalizing.{newImports}"
+    else
+      logWarning m!"Imports can be normalized:{newImports}"
 
 #norm_imports
 
