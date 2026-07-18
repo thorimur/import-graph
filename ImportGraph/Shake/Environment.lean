@@ -48,19 +48,25 @@ def _root_.Lean.Environment.currentExtraRevNeeds (env : Environment) (transNeeds
 -- TODO: Okay, I need a way to chain all these things conveniently
 
 
+/-- Creates an `Array Needs` of transitive dependencies among modules present in the environment.
+Assumes that modules in the environment are topologically sorted.
+
+**Caution:** Lean imports more modules when in the language server than during a typical
+`lake build`. As such, this should *only* be used in cases where `Needs` information for the
+modules guaranteed to be present in the environment during build is sufficient, or else behavior
+should be gated on the value of the option `Elab.inServer`. -/
 partial def Lean.Environment.mkTransDeps (env : Environment) : Array Needs := Id.run do
   let mut transDeps := Array.mkEmpty env.header.moduleData.size
-  for i in 0...env.header.moduleData.size do
-    let some mod := env.header.moduleData[i]?
-      | dbg_trace "yiiikes! {i}"
-        continue
+  for h : i in 0...env.header.moduleData.size do
+    let mod := env.header.moduleData[i]
     let mut transImps := Needs.empty
     for imp in mod.imports do
-      let some j := env.getModuleIdx? imp.module
-        | dbg_trace "yiiikes! (2) i := {i}; imp := ({imp});"
-          continue
+      -- Not every import is imported in the current file.
+      let some j := env.getModuleIdx? imp.module | continue
       let some transDepsj := transDeps[j]?
-        | dbg_trace "yiiikes! (3) transDeps.size := {transDeps.size}; j := {j}; imp := ({imp}); i := {i}{if transDeps.size + 1 == j then s!"\n{env.header.moduleData[(0 : Nat)...(j : Nat)].toArray.mapIdx fun idx i => s!"{env.allImportedModuleNames[idx]!} with {i.imports}\n"}" else ""}"
+        | panic! "Nontopological order encountered:\n\
+            `{imp.module}` is imported by `{env.header.modules[i]!.module}`, \
+            but comes afterwards in the environment"
           continue
       transImps := addTransitiveImps transImps imp j transDepsj
     transDeps := transDeps.push transImps
