@@ -2,6 +2,15 @@ module
 
 import all Lake.CLI.Shake
 
+/-!
+## Utilities for Shake types
+
+This file provides basic API for `Needs` and `Bitset`.
+
+Note: Because it provides API for private definitions, this module must be imported via
+`import all`.
+-/
+
 open Lean Lake.Shake
 
 -- TODO: consider alternative implementations?
@@ -15,10 +24,6 @@ def Nat.numSetBits (n : Nat) : Nat := Id.run do
   return acc
 
 namespace Lake.Shake
-
-/-!
-Note: this module must be imported via `import all`.
--/
 
 namespace Bitset
 
