@@ -6,7 +6,6 @@ Authors: Kim Morrison, Paul Lezeau
 module
 
 public meta import ImportGraph.Imports.Pretty
--- Test
 public meta import ImportGraph.Imports.Redundant
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Lean.Environment
@@ -105,8 +104,10 @@ elab tk:"#norm_imports" : command => do
         tk "Normalize imports: " false
     if hasErrors then
       logWarning m!"Imports can be normalized, but some comments could not be carried over. \
-        Please review the following description after normalizing.{newImports}"
+        Please review the following description after normalizing.\n{newImports}"
     else
+      -- Note: the widget nature of `diffGranularity := .word` effectively gives us a newline
+      -- before `{newImports}`.
       logWarning m!"Imports can be normalized:{newImports}"
 
 #norm_imports
