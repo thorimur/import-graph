@@ -189,13 +189,13 @@ instance : ToString Bitset where
 
 end Bitset
 
-section needs
+namespace Needs
 
 /-! ## `ForIn` -/
 
 /-- Iterates through `NeedsKinds.all`, and for each `NeedsKind`, iterates through the set bit
 indices of the corresponding `Bitset` from highest to lowest. -/
-@[specialize] protected def Needs.forInRev {m} [Monad m] {β : Type} (n : Needs) (init : β)
+@[specialize] protected def forInRev {m} [Monad m] {β : Type} (n : Needs) (init : β)
     (f : (NeedsKind × Nat) → β → m (ForInStep β)) : m (ForInStep β) := do
   let mut acc := init
   for k in NeedsKind.all do
@@ -207,18 +207,18 @@ indices of the corresponding `Bitset` from highest to lowest. -/
 /-- A `Needs` with a `ForIn` instance that traverses the component bitset's indices from the
 highest index to the lowest. This is the most efficient traversal of a bitset. Does not actually
 reverse the indices in the bitsets. -/
-structure Needs.HighToLow where
+structure HighToLow where
   toNeeds : Needs
 
-@[inherit_doc Needs.HighToLow]
-def Needs.highToLow (b : Needs) : Needs.HighToLow := ⟨b⟩
+@[inherit_doc HighToLow]
+def highToLow (b : Needs) : HighToLow := ⟨b⟩
 
-instance {m} [Monad m] : ForIn m Needs.HighToLow (NeedsKind × Nat) where
-  forIn needs init f := ForInStep.value <$> Needs.forInRev needs.toNeeds init f
+instance {m} [Monad m] : ForIn m HighToLow (NeedsKind × Nat) where
+  forIn needs init f := ForInStep.value <$> forInRev needs.toNeeds init f
 
 /-- Iterates through `NeedsKinds.all`, and for each `NeedsKind`, iterates through the set bit
 indices of the corresponding `Bitset` from lowest to highest. -/
-@[specialize] protected def Needs.forIn {m} [Monad m] {β : Type} (n : Needs) (init : β)
+@[specialize] protected def forIn {m} [Monad m] {β : Type} (n : Needs) (init : β)
     (f : (NeedsKind × Nat) → β → m (ForInStep β)) : m (ForInStep β) := do
   let mut acc := init
   for k in NeedsKind.all do
@@ -230,50 +230,50 @@ indices of the corresponding `Bitset` from lowest to highest. -/
 /-- A `Needs` with a `ForIn` instance that traverses the component bitset's indices from the
 highest index to the lowest. This is the most efficient traversal of a bitset. Does not actually
 reverse the indices in the bitsets. -/
-structure Needs.LowToHigh where
+structure LowToHigh where
   toNeeds : Needs
 
-@[inherit_doc Needs.LowToHigh]
-def Needs.lowToHigh (b : Needs) : Needs.LowToHigh := ⟨b⟩
+@[inherit_doc LowToHigh]
+def lowToHigh (b : Needs) : LowToHigh := ⟨b⟩
 
-instance {m} [Monad m] : ForIn m Needs.LowToHigh (NeedsKind × Nat) where
-  forIn needs init f := ForInStep.value <$> Needs.forIn needs.toNeeds init f
+instance {m} [Monad m] : ForIn m LowToHigh (NeedsKind × Nat) where
+  forIn needs init f := ForInStep.value <$> forIn needs.toNeeds init f
 
 /-! ## Operations -/
 
 deriving instance BEq for Needs
 
 /-- Includes `i` in the field of `Needs` corresponding to `k`. -/
-def Needs.single (i : Nat) (k : NeedsKind) : Needs := Needs.empty.set k {i}
+def single (i : Nat) (k : NeedsKind) : Needs := empty.set k {i}
 
 /-- Apply `f` to the component bitset of `n : Needs` at the given `NeedsKind`.
 Rephrasing of `f (n.get k)` for readability. -/
-@[inline] def Needs.applyAt (n : Needs) (k : NeedsKind) (f : Bitset → β) : β := f <| n.get k
+@[inline] def applyAt (n : Needs) (k : NeedsKind) (f : Bitset → β) : β := f <| n.get k
 
 /-- Whether `f : Bitset → Bool` is `true` for any of the component bitsets of the given `Needs`. -/
-@[inline] def Needs.any (n : Needs) (f : Bitset → Bool) : Bool := NeedsKind.all.any (n.applyAt · f)
+@[inline] def any (n : Needs) (f : Bitset → Bool) : Bool := NeedsKind.all.any (n.applyAt · f)
 /-- Whether `f : NeedsKind → Bitset → Bool` is `true` for any of the component bitsets of the given
 `Needs` at the bitset's corresponding `NeedsKind`. -/
-@[inline] def Needs.anyWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
+@[inline] def anyWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
   NeedsKind.all.any fun k => n.applyAt k (f k)
 
 /-- Whether `f : Bitset → Bool` is `true` for all of the component bitsets of the given `Needs`. -/
-@[inline] def Needs.all (n : Needs) (f : Bitset → Bool) : Bool := NeedsKind.all.all (n.applyAt · f)
+@[inline] def all (n : Needs) (f : Bitset → Bool) : Bool := NeedsKind.all.all (n.applyAt · f)
 /-- Whether `f : NeedsKind → Bitset → Bool` is `true` for any of the component bitsets of the given
 `Needs` at the bitset's corresponding `NeedsKind`. -/
-@[inline] def Needs.allWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
+@[inline] def allWithKind (n : Needs) (f : NeedsKind → Bitset → Bool) : Bool :=
   NeedsKind.all.all fun k => n.applyAt k (f k)
 
 /-- Folds `f` over the bitsets in `Needs` (in the order of `NeedsKind.all`). -/
-@[inline] def Needs.fold (n : Needs) (f : α → Bitset → α) (init : α) : α :=
+@[inline] def fold (n : Needs) (f : α → Bitset → α) (init : α) : α :=
   NeedsKind.all.foldl (init := init) fun a k => n.applyAt k (f a)
 /-- Folds `f` over the bitsets in `Needs` at their corresponding `NeedsKind`s (in the order of
 `NeedsKind.all`). -/
-@[inline] def Needs.foldWithKind (n : Needs) (f : α → NeedsKind → Bitset → α) (init : α) : α :=
+@[inline] def foldWithKind (n : Needs) (f : α → NeedsKind → Bitset → α) (init : α) : α :=
   NeedsKind.all.foldl (init := init) fun a k => n.applyAt k (f a k)
 
 /-- Applies `f` to all component `Bitset`s of the given `Needs`. -/
-@[specialize f] def Needs.map (n : Needs) (f : Bitset → Bitset) : Needs where
+@[specialize f] def map (n : Needs) (f : Bitset → Bitset) : Needs where
   pub      := f n.pub
   priv     := f n.priv
   metaPub  := f n.metaPub
@@ -281,7 +281,7 @@ Rephrasing of `f (n.get k)` for readability. -/
 
 /-- Applies `f` to all component `Bitset`s of the given `Needs` at their corresponding
 `NeedsKind`s. -/
-@[specialize f] def Needs.mapWithKind (n : Needs) (f : NeedsKind → Bitset → Bitset) : Needs where
+@[specialize f] def mapWithKind (n : Needs) (f : NeedsKind → Bitset → Bitset) : Needs where
   pub      := f .pub n.pub
   priv     := f .priv n.priv
   metaPub  := f .metaPub n.metaPub
@@ -289,7 +289,7 @@ Rephrasing of `f (n.get k)` for readability. -/
 
 /-- Applies `f` "pointwise" to the pairs of bitsets at each given `NeedsKind`.
 `f (n₁.get k) (n₂.get k) = (n₁.map₂ n₂ f).get k` for all `k : NeedsKind`. -/
-@[specialize f] def Needs.map₂ (n₁ n₂ : Needs) (f : Bitset → Bitset → Bitset) : Needs where
+@[specialize f] def map₂ (n₁ n₂ : Needs) (f : Bitset → Bitset → Bitset) : Needs where
   pub      := f n₁.pub n₂.pub
   priv     := f n₁.priv n₂.priv
   metaPub  := f n₁.metaPub n₂.metaPub
@@ -297,7 +297,7 @@ Rephrasing of `f (n.get k)` for readability. -/
 
 /-- Applies `f` "pointwise" to the pairs of bitsets at each given `NeedsKind`.
 `f k (n₁.get k) (n₂.get k) = (n₁.mapWithKind₂ n₂ f).get k` for all `k : NeedsKind`. -/
-@[specialize f] def Needs.mapWithKind₂ (n₁ n₂ : Needs)
+@[specialize f] def mapWithKind₂ (n₁ n₂ : Needs)
     (f : NeedsKind → Bitset → Bitset → Bitset) : Needs where
   pub      := f .pub n₁.pub n₂.pub
   priv     := f .priv n₁.priv n₂.priv
@@ -305,9 +305,9 @@ Rephrasing of `f (n.get k)` for readability. -/
   metaPriv := f .metaPriv n₁.metaPriv n₂.metaPriv
 
 /-- Whether all component bitsets are empty. -/
-@[inline] def Needs.isEmpty (n : Needs) : Bool := n.all (·.isEmpty)
+@[inline] def isEmpty (n : Needs) : Bool := n.all (·.isEmpty)
 /-- Whether the component bitset at `k : NeedsKind` is empty. -/
-@[inline] def Needs.isEmptyAt (k : NeedsKind) (n : Needs) : Bool := n.get k |>.isEmpty
+@[inline] def isEmptyAt (k : NeedsKind) (n : Needs) : Bool := n.get k |>.isEmpty
 
 instance : SDiff Needs where
   sdiff a b := a.map₂ b (· \ ·)
@@ -315,20 +315,20 @@ instance : SDiff Needs where
 /- Note: we run this a lot, so implement it directly and ensure it stays up-to-date with
 `NeedsKind.all` via proof. -/
 /-- Whether each field of the first `Needs` is contained within the corresponding field of the second. Use with caution: this does not necessarily indicate that one `Needs` subsumes another. See also `Needs.coveredBy` for testing against an import hierarchy. -/
-@[inline] def Needs.directLe (n m : Needs) : Bool :=
+@[inline] def directLe (n m : Needs) : Bool :=
   n.pub.le m.pub &&
   n.priv.le m.priv &&
   n.metaPub.le m.metaPub &&
   n.metaPriv.le m.metaPriv
 
-theorem Needs.directLe_eq_allWithKind_le :
-    Needs.directLe = fun n m => n.allWithKind fun k nb => nb.le <| m.get k := by
+theorem directLe_eq_allWithKind_le :
+    directLe = fun n m => n.allWithKind fun k nb => nb.le <| m.get k := by
   ext; simp [directLe, allWithKind, applyAt, NeedsKind.all, get, Bool.and_assoc]
 
 /-! ## Misc. -/
 
 /-- Assuming that the indices in `Needs` correspond to module indices in the provided environment, record an `Import` for each set index in `Needs` in some order. -/
-def Needs.toRawImports (env : Environment) (n : Needs) (skipInit := true) : Array Import :=
+def toRawImports (env : Environment) (n : Needs) (skipInit := true) : Array Import :=
     Id.run do
   let mut out := #[]
   for (k, i) in n.highToLow do
@@ -338,7 +338,7 @@ def Needs.toRawImports (env : Environment) (n : Needs) (skipInit := true) : Arra
     out := out.push { k with module }
   return out
 
-end needs
+end Needs
 
 instance : ToString NeedsKind where
   toString
