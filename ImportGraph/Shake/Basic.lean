@@ -335,8 +335,8 @@ def Needs.toRawImports (env : Environment) (n : Needs) (skipInit := true) : Arra
 
 end needs
 
-instance : ToMessageData NeedsKind where
-  toMessageData
+instance : ToString NeedsKind where
+  toString
     | .pub      => "public"
     | .metaPub  => "public meta"
     | .priv     => "private"
