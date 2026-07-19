@@ -122,7 +122,8 @@ def Backreporter.request (b : Backreporter α) (data : α) (ref? : Option Syntax
     CommandElabM Unit := do
   let ref := ref?.getD (← getRef)
   let promise ← IO.Promise.new
-  modifyEnv fun env => b.ext.modifyState env (·.push { ref, data, promise })
+  modifyEnv fun env => b.ext.modifyState env fun (requests, promises) =>
+    (requests.push { ref, data }, promises.push promise)
   -- Progress reporting (F4/F5 in DESIGN.md): an unfinished snapshot task over `ref` is shown
   -- as a processing range; `resultD` guarantees termination even if the promise is dropped
   -- (tail canceled, `#exit` above, fatal error) — never use `result!` here.
