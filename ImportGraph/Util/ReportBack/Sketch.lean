@@ -104,21 +104,6 @@ deriving Nonempty
 
 abbrev SimpleBackreporter := Backreporter Unit
 
-/-- Evaluates `f` on each request with the request's `ref` as the ambient `ref` during execution,
-and marks each one completed when `f` is finished.
-
-`f` should not error. If it does, the requests on which `f` was not yet run will not be marked
-completed during this function. However, if this is being used within `registerBackreporter`, note
-that the `Backreporter` framework will still eventually mark all requests as completed regardless
-of whether they error. -/
-def forRequests (requests : Array (Request α)) (f : α → CommandElabM Unit) :
-    CommandElabM Unit := do
-  for request in requests do
-    try
-      withRef request.ref <| f request.data
-    finally
-      request.markCompleted
-
 /--
 Registers a backreporter: a `ModuleLinter` that, at the end of the file, receives the requests
 filed by commands during elaboration (in file order) together with the whole file's command
@@ -158,6 +143,7 @@ def registerSimpleBackreporter
     (run : Array Syntax → Array SimpleRequest → CommandElabM Unit)
     (name : Name := by exact decl_name%) :=
   registerBackreporter run name
+
 /--
 Files a request with backreporter `b`, to be answered when `b` runs at the end of the file.
 The report attaches to `ref?` (default: the current command's ref), and that range shows as
@@ -185,8 +171,8 @@ def Backreporter.request (b : Backreporter α) (data : α)
     }
 
 @[inline] def Backreporter.simpleRequest (b : SimpleBackreporter)
-    (ref? : Option Syntax := none) (showProgress : Bool := true) :=
-  request b () ref? showProgress
+    (ref : Syntax) (showProgress : Bool := true) :=
+  request b () ref showProgress
 
 def Request.hasProgressTask (r : Request α) : Bool :=
   r.promise?.isSome
@@ -196,14 +182,35 @@ if there is no progress task associated with it. -/
 def Request.isComplete? (r : Request α) : BaseIO (Option Bool) :=
   r.promise?.mapM (·.isResolved)
 
+/-- `true` only if the given request has an associated progress task in the first place and that progress task is not completed. -/
+def Request.isPending (r : Request α) : BaseIO Bool :=
+  match r.promise? with
+  | none => pure false
+  | some promise => notM promise.isResolved
+
+/-- Evaluates `f` on each pending request with the request's `ref` as the ambient `ref` during
+execution, and marks each one completed when `f` is finished.
+
+`f` should not error. If it does, the requests on which `f` was not yet run will not be marked
+completed during this function. However, if this is being used within `registerBackreporter`, note
+that the `Backreporter` framework will still eventually mark all requests as completed regardless
+of whether they error. -/
+def Request.forPendingM [MonadRef m] [MonadLiftT BaseIO m] [MonadFinally m]
+    (requests : Array (Request α)) (f : α → m Unit) :
+    m Unit := do
+  for request in requests do
+    if ← request.isPending then
+      try
+        withRef request.ref <| f request.data
+      finally
+        request.markCompleted
+
 /--
 The requests filed with `b` so far in the current file, in file order. Useful e.g. for
 deduplicating at request time.
 -/
 def Backreporter.pendingRequests (b : Backreporter α) : CommandElabM (Array (Request α)) :=
-  do b.ext.getState (← getEnv) |>.filterM fun r => match r.promise? with
-    | none => pure true
-    | some promise => notM promise.isResolved
+  do b.ext.getState (← getEnv) |>.filterM (·.isPending)
 
 /-!
 ## Demo
