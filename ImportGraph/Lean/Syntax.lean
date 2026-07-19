@@ -36,4 +36,41 @@ def SourceInfo.getLeading? : SourceInfo → Option Substring.Raw
 @[inline] def SourceInfo.getTrailing (info : SourceInfo) : Substring.Raw :=
   info.getTrailing?.getD "".toRawSubstring
 
+/-- Clear the `leading` whitespace of the given syntax if the head `SourceInfo` is `.original`, and
+otherwise leave it unchanged. See `Syntax.unsetTrailing` for removing trailing whitespace. -/
+def Syntax.unsetLeading (stx : Syntax) : Syntax :=
+  stx.setHeadInfo <|
+    match stx.getHeadInfo with
+    | .original _ pos trailing endPos => .original "".toRawSubstring pos trailing endPos
+    | info => info
+
+/-- Get the start position of the leading whitespace of `.original` `SourceInfo`, or `none` if it
+is not `.original`. -/
+def SourceInfo.getOriginalLeadingPos? : SourceInfo → Option String.Pos.Raw
+  | .original (leading := leading) .. => some leading.startPos
+  | _ => none
+
+/-- Get the start position of the leading whitespace of `.original` `SourceInfo`, or the start
+position of `.synthetic` `SourceInfo` (and `none` otherwise).
+
+If `canonicalOnly := false` (the default), also returns `none` on non-canonical `.synthetic`
+`SourceInfo`. -/
+def SourceInfo.getLeadingPos? (info : SourceInfo) (canonicalOnly := false) :
+    Option String.Pos.Raw :=
+  match info, canonicalOnly with
+  | .original (leading := leading) ..,              _     => some leading.startPos
+  | .synthetic (pos := pos) (canonical := true) .., _
+  | .synthetic (pos := pos) ..,                     false => some pos
+  | _,                                              _     => none
+
+/--
+Get the start position of the leading whitespace of the `Syntax` if it is original, or the
+start position if synthetic (and `none` otherwise).
+
+If `canonicalOnly := false` (the default), also returns `none` on non-canonical synthetic `Syntax`.
+-/
+@[inline] def Syntax.getLeadingPos? (stx : Syntax) (canonicalOnly := false) :
+    Option String.Pos.Raw :=
+  stx.getHeadInfo.getLeadingPos? canonicalOnly
+
 end Lean
