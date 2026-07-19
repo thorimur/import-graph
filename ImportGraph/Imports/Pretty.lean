@@ -5,11 +5,13 @@ Authors: Thomas R. Murrills
 -/
 module
 
+public import Lean.CoreM
 public import Lean.Setup
 public import ImportGraph.Lean.Format
 
 meta import Lean.Parser.Module.Syntax
 import ImportGraph.Lean.Syntax
+import Lean.Meta.Hint
 
 /-!
 # Pretty-printing imports
@@ -363,35 +365,62 @@ def prettyWithWhitespace (imps : Array (Import × Whitespace))
 
 /-- Formats the modified `imps` and attaches whitespace from the corresponding import in
 `sourceImps` when doing so is unambiguous. Ambiguity encountered while assigning nontrivial
-whitespace is recorded in the returned `Array Import.FormatError`. See
-`prettyWithSourceWhitespaceAndErrorComment` for a version which formats the errors as a comment
-following the import block within the resulting `Format`.
+whitespace is recorded in the returned `Array Import.FormatError`.
+
+If `includeErrorsAsComment := true` (the default), the errors are included as a source comment
+following the formatted import block.
 
 We assume `sourceImps` has been created by `ImportGraph.headerToImportRefsWithWhitespace`. -/
 @[inline] def prettyWithSourceWhitespace (imps : Array Import)
-    (sourceImps : Array (ImportRef × Whitespace)) (fmtBehavior := Import.FormatBehavior.grouped) :
+    (sourceImps : Array (ImportRef × Whitespace)) (fmtBehavior := Import.FormatBehavior.grouped)
+    (includeErrorsAsComment := true) :
     Format × Import.FormatErrors :=
   let (impsWithWs, errs) := collectWithWhitespaceFromSource imps sourceImps
-  (prettyWithWhitespace impsWithWs fmtBehavior, errs)
-
-/-- Formats the modified `imps` and attaches whitespace from the corresponding import in
-`sourceImps` when doing so is unambiguous. Any ambiguity encountered while assigning nontrivial
-whitespace is recorded in a `/- -/`-style comment following the import block in the resulting
-`Format`. See `prettyWithWhitespaceFromSource` for a version which returns the errors separately.
-
-The returned `Bool` indicates whether any errors were generated (`true` for errors, `false` for
-none).
-
-We assume `sourceImps` come from `ImportGraph.headerToImportRefsWithWhitespace`. -/
-@[inline] def prettyWithSourceWhitespaceAndErrorComment (imps : Array Import)
-    (sourceImps : Array (ImportRef × Whitespace)) (fmtBehavior := Import.FormatBehavior.grouped) :
-    Format × Bool :=
-  let (impsFmt, errs) := prettyWithSourceWhitespace imps sourceImps fmtBehavior
-  if errs.isEmpty then (impsFmt, false) else
+  let impsFmt := prettyWithWhitespace impsWithWs fmtBehavior
+  if errs.isEmpty || !includeErrorsAsComment then (impsFmt, errs) else
     let msg := f!"\
       {impsFmt}\n\
       \n\
       /-\n\
       {errs}\n\
       -/"
-    (msg, true)
+    (msg, errs)
+
+/-- Create a message that suggests replacing `sourceImps` with `newImps`. Includes errors as a
+comment. Returns `none` if the suggestion is would not modify the source at all (including
+whitespace). -/
+def mkImportSuggestionMessage (ref : Syntax) (newImps : Array Import)
+    (sourceImps : Array (ImportRef × Whitespace)) (formatAs := Import.FormatBehavior.grouped)
+    (toCodeActionTitle? : Option (String → String) := some fun _ => "Modify imports")
+    (includeErrorsAsComment := true) :
+    CoreM (Option (MessageData × Import.FormatErrors)) := do
+  let (msg, errs) :=
+    Import.prettyWithSourceWhitespace newImps sourceImps formatAs includeErrorsAsComment
+  let stxRef := mkNullNode (sourceImps.map (·.1.stx.raw))
+  let sourceSubstr : Substring.Raw := {
+    str := (← getFileMap).source
+    startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
+    -- Ensure we include any annotation after the last import
+    stopPos := stxRef.getTrailingTailPos?.get! }
+  let (sourceSubstr, str) :=
+    -- We want two newlines in front of the suggestion to separate it from `module`.
+    -- Either chop these off the source if we can, or add them to our new string.
+    -- Chopping off allows us to avoid unsightly whitespace at the top of the suggestion.
+    let str := msg.pretty (width := Std.Format.getWidth <|← getOptions)
+    if let some sourceSubstr := sourceSubstr.dropPrefix? "\n\n".toRawSubstring then
+      (sourceSubstr, str)
+    else
+      (sourceSubstr, s!"\n\n{str}")
+  if sourceSubstr.toString == str then
+    return none
+  else
+    -- TODO: trivial case of no imports suggested
+    -- Need `.ofRange` here to insist on overwriting annotations on the last import
+    let msg ← Meta.Hint.mkSuggestionsMessage #[{
+        suggestion := str
+        span? := Syntax.ofRange ⟨sourceSubstr.startPos, sourceSubstr.stopPos⟩
+        -- The diff view often gets confused by imports that are shown in the error comment.
+        diffGranularity := if errs.isEmpty || !includeErrorsAsComment then .word else .none
+        toCodeActionTitle? }]
+      ref none (forceList := false)
+    return (msg, errs)
