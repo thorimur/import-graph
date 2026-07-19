@@ -65,11 +65,7 @@ private def hasImplicitPrelude (header : Lean.ModuleHeader) : Bool :=
   header.imports[0]?.isEqSome { module := `Init } &&
   header.imports[1]?.isEqSome { module := `Init, isMeta := true }
 
--- TODO: surely this exists?
-private def _root_.Except.getError! [Inhabited ε] : Except ε α → ε
-  | .error e => e
-  | _ => default
-
+-- TODO: hybrid olean + lean source strategy? or do the parsing in parallel, then process the result?
 /--
 Collect `mod` and its local imports **into `wm`**, adapting `LeanLib.recCollectLocalModules`:
 recurse into imports *first*, then record `mod`. Because a module is recorded only after
@@ -99,9 +95,10 @@ private partial def collect (mod : Name) (wm : WorkspaceModel) : IO WorkspaceMod
     errors := wm.errors.push <| .noLibOfModule mod }
   let srcFile := (wm.getLib! libIdx).srcPathOfMod mod
   let headerE ← observing do Lean.parseImports' (← IO.FS.readFile srcFile) srcFile.toString
-  -- TODO: clean up to avoid `getError!`
-  let .ok header := headerE | return { wm with
-    errors := wm.errors.push <| .readImportsFailure mod srcFile headerE.getError! }
+  let header ← match headerE with
+    | .ok header => pure header
+    | .error err =>
+      return { wm with errors := wm.errors.push <| .readImportsFailure mod srcFile err }
   let mut wm := wm
   for imp in header.imports do
     wm ← collect imp.module wm
