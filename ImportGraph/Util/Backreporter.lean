@@ -185,12 +185,13 @@ pending, so repeated calls run `f` on them again.
 
 If `f` throws, requests not yet visited are neither run nor marked completed here; when running
 inside a backreporter's handler, they are still marked completed once the handler exits. -/
+@[specialize]
 def Request.forPendingM [Monad m] [MonadRef m] [MonadLiftT BaseIO m] [MonadFinally m]
-    (requests : Array (Request α)) (f : α → m Unit) : m Unit := do
+    (requests : Array (Request α)) (f : Syntax → α → m Unit) : m Unit := do
   for request in requests do
     if ← request.isPending then
       try
-        withRef request.ref <| f request.data
+        withRef request.ref <| f request.ref request.data
       finally
         request.markCompleted
 
