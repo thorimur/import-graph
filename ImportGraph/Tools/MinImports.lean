@@ -9,6 +9,8 @@ public meta import ImportGraph.Imports.Pretty
 public meta import ImportGraph.Imports.Redundant
 public meta import ImportGraph.Imports.RequiredModules
 public meta import ImportGraph.Lean.Environment
+public meta import ImportGraph.Imports.FromSource
+public meta import ImportGraph.Lean.Syntax
 public meta import ImportGraph.Shake.Algebra
 public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Tools.NeedsGrid
@@ -33,56 +35,36 @@ with modules already transitively imported removed.
 Note that this will *not* account for tactics and syntax used in the file,
 so the results may not suffice as imports.
 -/
+@[deprecated
+  "Use `Environment.mkTransDeps` and `Needs.reduce` to handle imports in the module system"
+  (since := "2026-07-18")]
 def Lean.Environment.minimalRequiredModules (env : Environment) : Array Name :=
   let required := env.requiredModules.toArray.erase env.header.mainModule
   let redundant := findRedundantImports env required
   required.filter fun n => ¬ redundant.contains n
 
-def ImportGraph.parseCurrentHeader {m} [Monad m] [MonadLog m] [MonadLiftT IO m] :
-    m (TSyntax `Lean.Parser.Module.header × Parser.ModuleParserState × MessageLog) := do
-  Parser.parseHeader (Parser.mkInputContext (← getFileMap).source (← getFileName))
-
-open ImportGraph
-
-def _root_.Lean.Syntax.unsetLeading (stx : Syntax) : Syntax :=
-  stx.setHeadInfo <|
-    match stx.getHeadInfo with
-    | .original _ pos trailing endPos => .original "".toRawSubstring pos trailing endPos
-    | info => info
-
-def _root_.Lean.SourceInfo.getLeadingPos? (info : SourceInfo) (canonicalOnly := false) :
-    Option String.Pos.Raw :=
-  match info, canonicalOnly with
-  | .original (leading := leading) ..,  _ => some leading.startPos
-  | .synthetic (pos := pos) (canonical := true) .., _
-  | .synthetic (pos := pos) .., false => some pos
-  | _,                         _     => none
-
-def _root_.Lean.Syntax.getLeadingPos? (stx : Syntax) (canonicalOnly := false) :
-    Option String.Pos.Raw :=
-  stx.getHeadInfo.getLeadingPos? canonicalOnly
-
 open ImportGraph Lean
 
+/-- Normalizes the imports of the current file. This ensures that the same -/
 elab tk:"#norm_imports" : command => do
   let transDeps := (← getEnv).mkTransDeps
   let transNeeds := (← getEnv).transNeeds transDeps
-  let reducedImps := transNeeds.reduce transDeps |>.toImports (← getEnv)
+  let reducedImps := transNeeds.reduce transDeps |>.toRawImports (← getEnv)
   -- TODO: remove private imports that come from `import all`
-  let reducedImps := Import.includeAll (← getEnv).header.imports reducedImps
+  let reducedImps := Lake.Shake.Import.includeAll (← getEnv).header.imports reducedImps
   let (header, _, log) ← parseCurrentHeader
   if log.hasErrors then
     -- This should be impossible.
     throwError m!"The current imports failed to parse. Errors:\n\
-      {m!"\n".joinSep <| log.toList.map (·.data) }"
+      {m!"\n".joinSep <| log.toList.map (·.data)}"
   let impsWithRefs := headerToImportRefsWithWhitespace header
   let (msg, hasErrors) := Import.prettyWithSourceWhitespaceAndErrorComment reducedImps impsWithRefs
   let stxRef := mkNullNode (impsWithRefs.map (·.1.stx.raw))
   let sourceSubstr : Substring.Raw := {
-      str := (← getFileMap).source
-      startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
-      -- Ensure we include any annotation after the last import
-      stopPos := stxRef.getTrailingTailPos?.get! }
+    str := (← getFileMap).source
+    startPos := stxRef.getLeadingPos?.getD (stxRef.getPos?.get!)
+    -- Ensure we include any annotation after the last import
+    stopPos := stxRef.getTrailingTailPos?.get! }
   let (sourceSubstr, str) :=
     -- We want two newlines in front of the suggestion to separate it from `module`.
     -- Either chop these off the source if we can, or add them to our new string.
@@ -95,16 +77,21 @@ elab tk:"#norm_imports" : command => do
   if sourceSubstr.toString == str then
     logInfo m!"Imports are normalized."
   else
+    -- Note: we never need to consider the trivial case of no imports, since running this command
+    -- requires imports.
+    -- TODO: Allow the user to filter out this `ImportGraph` import?
     let newImports ← Elab.Command.liftCoreM <|
       -- Need `.ofRange` here to insist on overwriting trailing whitespace.
       Meta.Hint.mkSuggestionsMessage #[{
           suggestion := str
           span? := Syntax.ofRange ⟨sourceSubstr.startPos, sourceSubstr.stopPos⟩
-          diffGranularity := if hasErrors then .none else .word }]
-        tk "Normalize imports: " false
+          -- The diff often gets confused by imports that are shown in the error comment.
+          diffGranularity := if hasErrors then .none else .word
+          toCodeActionTitle? := some fun _ => "Normalize imports" }]
+        tk none (forceList := false)
     if hasErrors then
       logWarning m!"Imports can be normalized, but some comments could not be carried over. \
-        Please review the following description after normalizing.\n{newImports}"
+        Please review the comment that will be inserted after the imports.\n{newImports}"
     else
       -- Note: the widget nature of `diffGranularity := .word` effectively gives us a newline
       -- before `{newImports}`.
@@ -115,24 +102,24 @@ elab tk:"#norm_imports" : command => do
 -- #norm_imports
 -- #min_imports
 
-run_cmd do
-  let env ← getEnv
-  let mut encountered : Std.HashSet Name := {}
-  let mut outOfOrder : Std.HashMap (Name × Nat) (Array Import) := {}
-  for h : i in 0...env.header.moduleData.size do
-    let { imports .. } := env.header.moduleData[i]
-    let name := env.header.modules[i]!.module
-    let notEncounteredYet := imports.filter (!encountered.contains ·.module)
-    unless notEncounteredYet.isEmpty do
-      outOfOrder := outOfOrder.insert (name, i) notEncounteredYet
-    encountered := encountered.insert name
-  let (eventuallyEncountered, notEncountered) :=
-    outOfOrder.valuesArray.flatten.partition (encountered.contains ·.module)
-  logInfo m!"\n\
-    total := {env.header.moduleData.size}\n\
-    eventuallyEncountered := {eventuallyEncountered.size}\n\
-    notEncountered := {notEncountered.size}\n\
-    {outOfOrder.toArray.qsort (·.1.2 < ·.1.2)}"
+-- run_cmd do
+--   let env ← getEnv
+--   let mut encountered : Std.HashSet Name := {}
+--   let mut outOfOrder : Std.HashMap (Name × Nat) (Array Import) := {}
+--   for h : i in 0...env.header.moduleData.size do
+--     let { imports .. } := env.header.moduleData[i]
+--     let name := env.header.modules[i]!.module
+--     let notEncounteredYet := imports.filter (!encountered.contains ·.module)
+--     unless notEncounteredYet.isEmpty do
+--       outOfOrder := outOfOrder.insert (name, i) notEncounteredYet
+--     encountered := encountered.insert name
+--   let (eventuallyEncountered, notEncountered) :=
+--     outOfOrder.valuesArray.flatten.partition (encountered.contains ·.module)
+--   logInfo m!"\n\
+--     total := {env.header.moduleData.size}\n\
+--     eventuallyEncountered := {eventuallyEncountered.size}\n\
+--     notEncountered := {notEncountered.size}\n\
+--     {outOfOrder.toArray.qsort (·.1.2 < ·.1.2)}"
 
 
 -- /--
