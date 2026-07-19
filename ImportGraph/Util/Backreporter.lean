@@ -114,7 +114,8 @@ structure Request (α : Type) where private mk' ::
   elaborated data — should be captured here. -/
   data : α
   /-- The promise backing this request's progress task, if progress was requested. `Unit`-typed
-  by design: resolving it signals completion and nothing else. Use `Request.markCompleted`. -/
+  by design: resolving it signals completion and nothing else. Use `Request.markCompleted`. If
+  `Elab.async` is `false` when the request is created, this is `none`. -/
   private promise? : Option (IO.Promise Unit)
 
 /-- A request that carries no data. -/
@@ -273,7 +274,8 @@ branch (such as an async proof body).
 def sendRequest (b : Backreporter α) (data : α)
     (ref? : Option Syntax := none) (showProgress : Bool := true) : CommandElabM Unit := do
   let ref := ref?.getD (← getRef)
-  let promise? ← if showProgress then some <$> IO.Promise.new else pure none
+  let promise? ← if !(Elab.async.get (← getOptions)) then pure none else
+    if showProgress then some <$> IO.Promise.new else pure none
   modifyEnv fun env => b.ext.modifyState env (·.push { ref, data, promise? })
   if let some promise := promise? then
     -- An unfinished snapshot task over `ref` marks it as in-progress in the language server.
