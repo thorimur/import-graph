@@ -24,6 +24,11 @@ Key structural decisions (see `DESIGN.md` for the analysis):
 * Report *content* flows through the module linter's own snapshot (fresh on every edit);
   the per-request promise carries *progress only*, so first-wins resolution and snapshot
   reuse cannot pin stale reports.
+* Promises are pure framework plumbing and appear nowhere in the metaprogrammer-facing
+  surface: they live in a single framework-owned extension keyed by reporter name (they must
+  stay environment-situated so that reuse replays the *same* promise object to the re-run
+  terminal command). Consequently, progress is opt-in per request
+  (`request (showProgress := false)` files a request with no yellow bar).
 * The framework — not the handler — resolves every promise, in `finally`; tasks are built
   with `resultD`, so a dropped promise can never hang reporting.
 -/
@@ -41,9 +46,19 @@ structure Request (α : Type) where
   /-- Payload provided at request time. Capture everything you need here: backreporters see
   the final environment and whole-file syntax, but *not* earlier commands' info trees. -/
   data : α
-  -- /-- Progress-only promise; resolved by the framework after the handler runs. Handlers must
-  -- not resolve it themselves, and no report content ever flows through it. -/
-  -- promise : IO.Promise Unit
+
+/--
+Framework-internal registry of progress promises, keyed by backreporter name. Each promise
+backs one requesting command's "yellow bar" snapshot task and is resolved (unconditionally,
+first-wins) by the framework once that backreporter has run at the end of the file.
+
+These must live in the environment: on an edit after a requesting command, the command — and
+its pending promise — is replayed via snapshot reuse, and the re-elaborated end of file must
+resolve that *same* promise object. Keeping them out of `Request` keeps framework plumbing out
+of the metaprogrammer-facing surface (and makes progress optional per request).
+-/
+private initialize progressExt : EnvExtension (NameMap (Array (IO.Promise Unit))) ←
+  registerEnvExtension (pure {})
 
 abbrev SimpleRequest := Request Unit
 
@@ -75,7 +90,7 @@ structure Backreporter (α : Type) where
   run : Array Syntax → Array (Request α) → CommandElabM Unit
   /-- Per-reporter request registry. Environment-extension state is versioned with the
   environment, which is what makes requests behave correctly under editing and reuse. -/
-  ext : EnvExtension (Array (Request α) × Array (IO.Promise Unit))
+  ext : EnvExtension (Array (Request α))
 deriving Nonempty
 
 /--
@@ -96,15 +111,19 @@ def registerBackreporter
     (run : Array Syntax → Array (Request α) → CommandElabM Unit)
     (name : Name := by exact decl_name%) :
     IO (Backreporter α) := do
-  let ext ← registerEnvExtension (pure (#[], #[]))
+  let ext ← registerEnvExtension (pure #[])
   addModuleLinter {
     name
     run := fun cmds => do
-      let (requests, promises) := ext.getState (← getEnv)
-      if requests.isEmpty then return
+      let env ← getEnv
+      let requests := ext.getState env
+      let promises := (progressExt.getState env |>.find? name).getD #[]
       try
-        run cmds requests
+        unless requests.isEmpty do
+          run cmds requests
       finally
+        -- Unconditional, framework-owned resolution: an unresolved-but-retained promise
+        -- would freeze the requesting command's progress bar until the next edit.
         for promise in promises do
           promise.resolve ()
   }
@@ -113,26 +132,37 @@ def registerBackreporter
 /--
 Files a request with backreporter `b`, to be answered when `b` runs at the end of the file.
 The report attaches to `ref?` (default: the current command's ref), and that range shows as
-in-progress ("yellow bar") until the backreporter has run.
+in-progress ("yellow bar") until the backreporter has run. Pass `showProgress := false` to
+file the request without any progress indication — e.g. for purely informational aggregation
+where a lingering bar on the command would be noise.
 
 Must be called at the command-elaboration level, not from inside an async elaboration branch
 (the registry's `mainOnly` access mode panics otherwise).
 -/
-def Backreporter.request (b : Backreporter α) (data : α) (ref? : Option Syntax := none) :
-    CommandElabM Unit := do
+def Backreporter.request (b : Backreporter α) (data : α) (ref? : Option Syntax := none)
+    (showProgress : Bool := true) : CommandElabM Unit := do
   let ref := ref?.getD (← getRef)
-  let promise ← IO.Promise.new
-  modifyEnv fun env => b.ext.modifyState env fun (requests, promises) =>
-    (requests.push { ref, data }, promises.push promise)
-  -- Progress reporting (F4/F5 in DESIGN.md): an unfinished snapshot task over `ref` is shown
-  -- as a processing range; `resultD` guarantees termination even if the promise is dropped
-  -- (tail canceled, `#exit` above, fatal error) — never use `result!` here.
-  logSnapshotTask {
-    stx? := some ref
-    cancelTk? := none
-    task := promise.resultD () |>.map (sync := true) fun _ =>
-      SnapshotTree.mk { desc := s!"backreport from {b.name}", diagnostics := .empty } #[]
-  }
+  modifyEnv fun env => b.ext.modifyState env (·.push { ref, data })
+  if showProgress then
+    let promise ← IO.Promise.new
+    modifyEnv fun env => progressExt.modifyState env fun m =>
+      m.insert b.name ((m.find? b.name).getD #[] |>.push promise)
+    -- Progress reporting (F4/F5 in DESIGN.md): an unfinished snapshot task over `ref` is shown
+    -- as a processing range; `resultD` guarantees termination even if the promise is dropped
+    -- (tail canceled, `#exit` above, fatal error) — never use `result!` here.
+    logSnapshotTask {
+      stx? := some ref
+      cancelTk? := none
+      task := promise.resultD () |>.map (sync := true) fun _ =>
+        SnapshotTree.mk { desc := s!"backreport from {b.name}", diagnostics := .empty } #[]
+    }
+
+/--
+The requests filed with `b` so far in the current file, in file order. Useful e.g. for
+deduplicating at request time.
+-/
+def Backreporter.pendingRequests (b : Backreporter α) : CommandElabM (Array (Request α)) :=
+  return b.ext.getState (← getEnv)
 
 /-!
 ## Demo
