@@ -42,7 +42,7 @@ public meta section
 namespace ImportGraph.ReportBack
 
 /-- A single report-back request, as seen by a backreporter's handler. -/
-structure Request (α : Type) where
+structure Request (α : Type) where private mk' ::
   /-- Syntax the report should attach to; defaults to the requesting command's ref. -/
   ref : Syntax
   /-- Payload provided at request time. Capture everything you need here: backreporters see
@@ -58,6 +58,20 @@ structure Request (α : Type) where
 
 /-- A request that carries no data. -/
 abbrev SimpleRequest := Request Unit
+
+/-- Creates a request with no progress task.
+
+To register a task in the environment instead, use `sendRequest` with the `showProgress` flag
+controlling whether a progress task is created for the request. -/
+def Request.mkPure (ref : Syntax) (data : α) : Request α :=
+  { ref, data, promise? := none }
+
+/-- Creates a simple request with no progress task.
+
+To register a task in the environment instead, use `sendRequest` with the `showProgress` flag
+controlling whether a progress task is created for the request. -/
+def SimpleRequest.mkPure (ref : Syntax) : SimpleRequest :=
+  { ref, data := (), promise? := none }
 
 /--
 Clears this request's progress bar ("yellow bar") now, rather than when the handler returns.
@@ -154,7 +168,7 @@ where a lingering bar on the command would be noise.
 Must be called at the command-elaboration level, not from inside an async elaboration branch
 (the registry's `mainOnly` access mode panics otherwise).
 -/
-def Backreporter.request (b : Backreporter α) (data : α)
+def Backreporter.sendRequest (b : Backreporter α) (data : α)
     (ref? : Option Syntax := none) (showProgress : Bool := true) : CommandElabM Unit := do
   let ref := ref?.getD (← getRef)
   let promise? ← if showProgress then some <$> IO.Promise.new else pure none
@@ -170,9 +184,9 @@ def Backreporter.request (b : Backreporter α) (data : α)
         SnapshotTree.mk { desc := s!"backreport from {b.name}", diagnostics := .empty } #[]
     }
 
-@[inline] def Backreporter.simpleRequest (b : SimpleBackreporter)
+@[inline] def Backreporter.sendSimpleRequest (b : SimpleBackreporter)
     (ref : Syntax) (showProgress : Bool := true) :=
-  request b () ref showProgress
+  sendRequest b () ref showProgress
 
 def Request.hasProgressTask (r : Request α) : Bool :=
   r.promise?.isSome
@@ -240,7 +254,7 @@ initialize demoReporter : Backreporter Payload ←
 /-- Ask the demo backreporter whether `x` exists once the whole file has elaborated. -/
 elab "#find_later " x:ident : command => do
   unless x.raw.isMissing do
-    demoReporter.request { constName := x.getId }
+    demoReporter.sendRequest { constName := x.getId }
 
 end Demo
 
