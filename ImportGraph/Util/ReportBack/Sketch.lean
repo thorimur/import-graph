@@ -22,15 +22,17 @@ Key structural decisions (see `DESIGN.md` for the analysis):
   non-persistent, `mainOnly` environment extension minted per backreporter, so requests are
   rolled back / replayed correctly under interactive editing and incremental reuse.
 * Report *content* flows through the module linter's own snapshot (fresh on every edit);
-  the per-request promise carries *progress only*, so first-wins resolution and snapshot
-  reuse cannot pin stale reports.
-* Promises are pure framework plumbing and appear nowhere in the metaprogrammer-facing
-  surface: they live in a single framework-owned extension keyed by reporter name (they must
-  stay environment-situated so that reuse replays the *same* promise object to the re-run
-  terminal command). Consequently, progress is opt-in per request
-  (`request (showProgress := false)` files a request with no yellow bar).
-* The framework — not the handler — resolves every promise, in `finally`; tasks are built
-  with `resultD`, so a dropped promise can never hang reporting.
+  each request's optional promise is `Unit`-typed *by design* — resolving it is a pure
+  completion signal, never a content channel — so first-wins resolution and snapshot reuse
+  cannot pin stale reports.
+* Handlers may clear an individual request's yellow bar early (`Request.clearProgress`) as
+  they work through their requests; this is safe because resolution is idempotent and the
+  framework backstops every promise in `finally`, so a crashed or forgetful handler can never
+  freeze a bar. Tasks are built with `resultD`, so a dropped promise can never hang reporting.
+  Progress is opt-in per request (`showProgress := false` files a request with no yellow bar).
+* Handlers run unconditionally at the end of the file, even with zero requests — mechanism,
+  not policy; early-out on `requests.isEmpty` yourself if you only want request-driven
+  behavior.
 -/
 
 open Lean Elab Command Language
@@ -46,37 +48,44 @@ structure Request (α : Type) where
   /-- Payload provided at request time. Capture everything you need here: backreporters see
   the final environment and whole-file syntax, but *not* earlier commands' info trees. -/
   data : α
+  /-- Promise backing this request's "yellow bar" snapshot task, if progress was requested
+  (`Backreporter.request`'s `showProgress`). `Unit`-typed by design: resolving it is a pure
+  completion signal — report content never flows through it (content through a promise goes
+  stale under snapshot reuse; see `DESIGN.md`). Handlers may resolve it early via
+  `Request.clearProgress`; the framework resolves any survivors after the handler runs.
+  Both are safe: resolution is idempotent (first-wins). -/
+  private promise? : Option (IO.Promise Unit)
 
-/--
-Framework-internal registry of progress promises, keyed by backreporter name. Each promise
-backs one requesting command's "yellow bar" snapshot task and is resolved (unconditionally,
-first-wins) by the framework once that backreporter has run at the end of the file.
-
-These must live in the environment: on an edit after a requesting command, the command — and
-its pending promise — is replayed via snapshot reuse, and the re-elaborated end of file must
-resolve that *same* promise object. Keeping them out of `Request` keeps framework plumbing out
-of the metaprogrammer-facing surface (and makes progress optional per request).
--/
-private initialize progressExt : EnvExtension (NameMap (Array (IO.Promise Unit))) ←
-  registerEnvExtension (pure {})
-
+/-- A request that carries no data. -/
 abbrev SimpleRequest := Request Unit
 
-/-- Log a message at the request site. Runs inside the backreporter, whose messages are
-reported from the end-of-file lint snapshot but positioned at `req.ref`. -/
-def Request.log (req : Request α) (msg : MessageData)
-    (severity : MessageSeverity := .information) : CommandElabM Unit :=
-  withRef req.ref <| logAt req.ref msg severity
+/--
+Clears this request's progress bar ("yellow bar") now, rather than when the handler returns.
+Call it as each request's processing completes so that bars clear in sync with actual
+completions rather than all at once — module linters can be arbitrarily slow. Optional and
+idempotent: the framework clears every remaining bar once the handler has run (even if it
+threw). Progress-UI only: report *messages* from module linters are delivered together, once
+all module linters have finished.
+-/
+def Request.markCompleted (req : Request α) : BaseIO Unit :=
+  req.promise?.forM (·.resolve ())
 
-@[inherit_doc Request.log]
+variable {m} [Monad m] [MonadLog m] [AddMessageContext m] [MonadOptions m]
+
+/-- Log a message at the request site. A thin wrapper around `log req.ref msg` for convenience. -/
+@[inline] def Request.log (req : Request α) (msg : MessageData)
+    (severity : MessageSeverity := .information) : m Unit :=
+  logAt req.ref msg severity
+
+@[inline, inherit_doc Request.log]
 def Request.logInfo (req : Request α) (msg : MessageData) : CommandElabM Unit :=
   req.log msg .information
 
-@[inherit_doc Request.log]
+@[inline, inherit_doc Request.log]
 def Request.logWarning (req : Request α) (msg : MessageData) : CommandElabM Unit :=
   req.log msg .warning
 
-@[inherit_doc Request.log]
+@[inline, inherit_doc Request.log]
 def Request.logError (req : Request α) (msg : MessageData) : CommandElabM Unit :=
   req.log msg .error
 
@@ -93,14 +102,33 @@ structure Backreporter (α : Type) where
   ext : EnvExtension (Array (Request α))
 deriving Nonempty
 
+abbrev SimpleBackreporter := Backreporter Unit
+
+/-- Evaluates `f` on each request with the request's `ref` as the ambient `ref` during execution,
+and marks each one completed when `f` is finished.
+
+`f` should not error. If it does, the requests on which `f` was not yet run will not be marked
+completed during this function. However, if this is being used within `registerBackreporter`, note
+that the `Backreporter` framework will still eventually mark all requests as completed regardless
+of whether they error. -/
+def forRequests (requests : Array (Request α)) (f : α → CommandElabM Unit) :
+    CommandElabM Unit := do
+  for request in requests do
+    try
+      withRef request.ref <| f request.data
+    finally
+      request.markCompleted
+
 /--
 Registers a backreporter: a `ModuleLinter` that, at the end of the file, receives the requests
 filed by commands during elaboration (in file order) together with the whole file's command
 syntax, and reports back — typically at each request's position, via `Request.log*`.
 
 The handler runs against the *final* environment; any environment/state changes it makes are
-discarded (only messages and traces escape). It is only invoked if at least one request was
-filed. Must be called during initialization, i.e. from an `initialize` block:
+discarded (only messages and traces escape). It runs even when *no* requests were filed —
+early-out on `requests.isEmpty` if you only want request-driven behavior; running
+unconditionally enables e.g. whole-file reports, or complaining that an expected request never
+arrived. Must be called during initialization, i.e. from an `initialize` block:
 
 ```
 initialize myReporter : Backreporter Payload ←
@@ -111,24 +139,25 @@ def registerBackreporter
     (run : Array Syntax → Array (Request α) → CommandElabM Unit)
     (name : Name := by exact decl_name%) :
     IO (Backreporter α) := do
-  let ext ← registerEnvExtension (pure #[])
+  let ext ← registerEnvExtension (pure #[]) (asyncMode := .mainOnly)
   addModuleLinter {
     name
-    run := fun cmds => do
-      let env ← getEnv
-      let requests := ext.getState env
-      let promises := (progressExt.getState env |>.find? name).getD #[]
+    run cmds := do
+      let requests := ext.getState (← getEnv)
       try
-        unless requests.isEmpty do
-          run cmds requests
+        run cmds requests
       finally
-        -- Unconditional, framework-owned resolution: an unresolved-but-retained promise
-        -- would freeze the requesting command's progress bar until the next edit.
-        for promise in promises do
-          promise.resolve ()
+        -- Backstop resolution (first-wins, so early `clearProgress` calls are unaffected):
+        -- an unresolved-but-retained promise would freeze a progress bar until the next edit.
+        for req in requests do
+          req.markCompleted
   }
   return { name, run, ext }
 
+def registerSimpleBackreporter
+    (run : Array Syntax → Array SimpleRequest → CommandElabM Unit)
+    (name : Name := by exact decl_name%) :=
+  registerBackreporter run name
 /--
 Files a request with backreporter `b`, to be answered when `b` runs at the end of the file.
 The report attaches to `ref?` (default: the current command's ref), and that range shows as
@@ -139,14 +168,12 @@ where a lingering bar on the command would be noise.
 Must be called at the command-elaboration level, not from inside an async elaboration branch
 (the registry's `mainOnly` access mode panics otherwise).
 -/
-def Backreporter.request (b : Backreporter α) (data : α) (ref? : Option Syntax := none)
-    (showProgress : Bool := true) : CommandElabM Unit := do
+def Backreporter.request (b : Backreporter α) (data : α)
+    (ref? : Option Syntax := none) (showProgress : Bool := true) : CommandElabM Unit := do
   let ref := ref?.getD (← getRef)
-  modifyEnv fun env => b.ext.modifyState env (·.push { ref, data })
-  if showProgress then
-    let promise ← IO.Promise.new
-    modifyEnv fun env => progressExt.modifyState env fun m =>
-      m.insert b.name ((m.find? b.name).getD #[] |>.push promise)
+  let promise? ← if showProgress then some <$> IO.Promise.new else pure none
+  modifyEnv fun env => b.ext.modifyState env (·.push { ref, data, promise? })
+  if let some promise := promise? then
     -- Progress reporting (F4/F5 in DESIGN.md): an unfinished snapshot task over `ref` is shown
     -- as a processing range; `resultD` guarantees termination even if the promise is dropped
     -- (tail canceled, `#exit` above, fatal error) — never use `result!` here.
@@ -157,12 +184,26 @@ def Backreporter.request (b : Backreporter α) (data : α) (ref? : Option Syntax
         SnapshotTree.mk { desc := s!"backreport from {b.name}", diagnostics := .empty } #[]
     }
 
+@[inline] def Backreporter.simpleRequest (b : SimpleBackreporter)
+    (ref? : Option Syntax := none) (showProgress : Bool := true) :=
+  request b () ref? showProgress
+
+def Request.hasProgressTask (r : Request α) : Bool :=
+  r.promise?.isSome
+
+/-- If the `Request` has a progress task, whether that task is marked as complete. Returns `none`
+if there is no progress task associated with it. -/
+def Request.isComplete? (r : Request α) : BaseIO (Option Bool) :=
+  r.promise?.mapM (·.isResolved)
+
 /--
 The requests filed with `b` so far in the current file, in file order. Useful e.g. for
 deduplicating at request time.
 -/
 def Backreporter.pendingRequests (b : Backreporter α) : CommandElabM (Array (Request α)) :=
-  return b.ext.getState (← getEnv)
+  do b.ext.getState (← getEnv) |>.filterM fun r => match r.promise? with
+    | none => pure true
+    | some promise => notM promise.isResolved
 
 /-!
 ## Demo
