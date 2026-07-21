@@ -102,6 +102,10 @@ local instance instImportOrdPretty : Ord Import where
 local instance instImportRefOrdPretty : Ord ImportRef where
   compare := ImportRef.comparePretty
 
+/-- Whether two `Array Import`s contain the same imports when considered as a (multi)set. -/
+def beqUpToOrder (imps₁ imps₂ : Array Import) : Bool :=
+  imps₁.qsortOrd == imps₂.qsortOrd
+
 /-- Whitespace (including comments) surrounding an import. -/
 /- TODO: consider using `Substring.Raw` or string slices for efficiency. These strings are usually
 small and may be manipulated, and the `Substring.Raw` API is unfriendly, so for convenience we just
