@@ -8,24 +8,28 @@ open Lean Elab Command Backreporter
 
 public meta section
 
+-- TODO: module docstring
+-- TODO: demeta?
+-- TODO: different name?
+
 /-- Runs `Array Syntax → CommandElabM Unit` requests at the end of the file on the module's syntax,
 in the same manner as a linter (i.e. only preserving messages and the trace state between
 requests). -/
 initialize runReporter : Backreporter (Array Syntax → CommandElabM Unit) ←
   registerBackreporter fun cmds requests => do
     for request in requests do withRef request.ref do
-      if ← request.isPending then
-        let savedState ← get
-        try
-          request.data cmds
-          -- Wait for the message to be reported instead of running `request.markCompleted` here.
-        catch
-          | Exception.error ref msg =>
-            logException (.error ref m!"Backreporting request failed: {msg}")
-          | ex@(Exception.internal _ _) =>
-            logException ex
-        finally
-          modify fun s => { savedState with messages := s.messages, traceState := s.traceState }
+      -- Don't check if pending
+      let savedState ← get
+      try
+        request.data cmds
+        -- Wait for the message to be reported instead of running `request.markCompleted` here.
+      catch
+        | Exception.error ref msg =>
+          logException (.error ref m!"Backreporting request failed: {msg}")
+        | ex@(Exception.internal _ _) =>
+          logException ex
+      finally
+        modify fun s => { savedState with messages := s.messages, traceState := s.traceState }
 
 /-- Runs `x` at the end of the file.
 
