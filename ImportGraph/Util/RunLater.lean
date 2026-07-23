@@ -1,3 +1,8 @@
+/-
+Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Thomas R. Murrills
+-/
 module
 
 public import ImportGraph.Util.Backreporter
@@ -6,19 +11,14 @@ namespace ImportGraph
 
 open Lean Elab Command Backreporter
 
-public meta section
-
--- TODO: module docstring
--- TODO: demeta?
--- TODO: different name?
+public section
 
 /-- Runs `Array Syntax → CommandElabM Unit` requests at the end of the file on the module's syntax,
 in the same manner as a linter (i.e. only preserving messages and the trace state between
 requests). -/
 initialize runReporter : Backreporter (Array Syntax → CommandElabM Unit) ←
   registerBackreporter fun cmds requests => do
-    for request in requests do withRef request.ref do
-      -- Don't check if pending
+    for request in requests do
       let savedState ← get
       try
         request.data cmds
@@ -33,19 +33,16 @@ initialize runReporter : Backreporter (Array Syntax → CommandElabM Unit) ←
 
 /-- Runs `x` at the end of the file.
 
-If `showProgress := true` (the default) and `Elab.async` is `true`, creates a yellow bar which
-disappears once `x` is run. Uses `ref?` for the location of the bar if provided; otherwise uses the
-ambient `ref`. -/
-def runLater (x : CommandElabM Unit) (ref? : Option Syntax := none) (showProgress := true) :
+If `progressIndication := .atCommand` (the default) and both `Elab.async` and `Elab.inServer` are
+`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range of the current command) and `.quiet` to show no progress bar at all. -/
+def runLater (x : CommandElabM Unit) (progressIndication := ProgressIndication.atCommand) :
     CommandElabM Unit :=
-  runReporter.sendRequest (fun _ => x) ref? showProgress
+  runReporter.sendRequest (fun _ => x) progressIndication
 
 /-- Runs `f` at the end of the file on the module's full `Array Syntax`.
 
-If `showProgress := true` (the default) and `Elab.async` is `true`, creates a yellow bar which
-disappears once `x` is run. Uses `ref?` for the location of the bar if provided; otherwise uses the
-ambient `ref`. -/
+If `progressIndication := .atCommand` (the default) and both `Elab.async` and `Elab.inServer` are
+`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range of the current command) and `.quiet` to show no progress bar at all. -/
 def runLaterWithSyntax (f : Array Syntax → CommandElabM Unit)
-    (ref? : Option Syntax := none) (showProgress := true) :
-    CommandElabM Unit :=
-  runReporter.sendRequest f ref? showProgress
+    (progressIndication := ProgressIndication.atCommand) : CommandElabM Unit :=
+  runReporter.sendRequest f progressIndication
