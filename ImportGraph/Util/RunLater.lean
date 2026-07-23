@@ -13,9 +13,9 @@ open Lean Elab Command Backreporter
 
 public section
 
-/-- Runs `Array Syntax → CommandElabM Unit` requests at the end of the file on the module's syntax,
-in the same manner as a linter (i.e. only preserving messages and the trace state between
-requests). -/
+/-- Runs arbitrary `Array Syntax → CommandElabM Unit` requests at the end of the file on the
+module's syntax, in the same manner as a linter (i.e. only preserving messages and the trace state
+between requests). -/
 initialize runReporter : Backreporter (Array Syntax → CommandElabM Unit) ←
   registerBackreporter fun cmds requests => do
     for request in requests do
@@ -31,18 +31,30 @@ initialize runReporter : Backreporter (Array Syntax → CommandElabM Unit) ←
       finally
         modify fun s => { savedState with messages := s.messages, traceState := s.traceState }
 
-/-- Runs `x` at the end of the file.
+/-- Runs `x` at the end of the file. May log messages, but cannot persistently alter the
+environment or access infotrees.
+
+`x` will be run with the terminal command's ref as the ambient ref; bundle position info into `x` in
+order to log on the intended ranges.
 
 If `progressIndication := .atCommand` (the default) and both `Elab.async` and `Elab.inServer` are
-`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range of the current command) and `.quiet` to show no progress bar at all. -/
+`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use
+`.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range
+of the current command) and `.quiet` to show no progress bar at all. -/
 def runLater (x : CommandElabM Unit) (progressIndication := ProgressIndication.atCommand) :
     CommandElabM Unit :=
   runReporter.sendRequest (fun _ => x) progressIndication
 
-/-- Runs `f` at the end of the file on the module's full `Array Syntax`.
+/-- Runs `f` at the end of the file on the module's full `Array Syntax`. May log messages, but
+cannot persistently alter the environment or access infotrees.
+
+`f` will be run with the terminal command's ref as the ambient ref; bundle position info into `f` in
+order to log on the intended ranges.
 
 If `progressIndication := .atCommand` (the default) and both `Elab.async` and `Elab.inServer` are
-`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range of the current command) and `.quiet` to show no progress bar at all. -/
+`true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use
+`.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range
+of the current command) and `.quiet` to show no progress bar at all. -/
 def runLaterWithSyntax (f : Array Syntax → CommandElabM Unit)
     (progressIndication := ProgressIndication.atCommand) : CommandElabM Unit :=
   runReporter.sendRequest f progressIndication
