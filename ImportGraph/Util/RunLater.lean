@@ -41,8 +41,8 @@ If `progressIndication := .atCommand` (the default) and both `Elab.async` and `E
 `true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use
 `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range
 of the current command) and `.quiet` to show no progress bar at all. -/
-def runLater (x : CommandElabM Unit) (progressIndication := ProgressIndication.atCommand) :
-    CommandElabM Unit :=
+@[inline] def runLater (x : CommandElabM Unit)
+    (progressIndication := ProgressIndication.atCommand) : CommandElabM Unit :=
   runReporter.sendRequest (fun _ => x) progressIndication
 
 /-- Runs `f` at the end of the file on the module's full `Array Syntax`. May log messages, but
@@ -55,6 +55,6 @@ If `progressIndication := .atCommand` (the default) and both `Elab.async` and `E
 `true`, this creates a yellow bar which disappears once `x` is run at the end of the file. Use
 `.at (ref : Syntax)` to show the progress bar at `ref` (note: this is clamped to the position range
 of the current command) and `.quiet` to show no progress bar at all. -/
-def runLaterWithSyntax (f : Array Syntax → CommandElabM Unit)
+@[inline] def runLaterWithSyntax (f : Array Syntax → CommandElabM Unit)
     (progressIndication := ProgressIndication.atCommand) : CommandElabM Unit :=
   runReporter.sendRequest f progressIndication
