@@ -5,81 +5,32 @@ Authors: Thomas R. Murrills
 -/
 module
 
-public meta import Lean.Elab.Command
-public meta import Lean.Language.Basic
-meta import Lean
+public import Lean.Elab.Command
 
 /-!
-# Backreporters: reporting back to commands at the end of the file
+# Backreporters
 
-Some questions a command asks can only be answered once the rest of the file has been
-elaborated: "is this declaration still unused at the end of the file?", "which of these
-imports did the file end up needing?". A *backreporter* lets a command file a *request*
-during elaboration and receive a report — at the requesting command's position — once the
-whole file has been processed.
+A `Backreporter` enables command elaborators to send "requests" to be fulfilled at the end of the file, while interactively displaying a progress indicator (yellow bar) at the command until the requests are processed at the end of the file.
 
-To define a backreporter, call `registerBackreporter` from an `initialize` block, providing
-the handler that will run at the end of the file:
+A backreporter whose requests can carry data of type `α` may be registered with `registerBackreporter`, which asks for some
+`run : Array Syntax → Array (Request α) → CommandElabM Unit` which processes the full array of accumulated requests at the end of the file in a `ModuleLinter` and clears the progress bar indicators.
 
-```lean
-initialize stillAbsentReporter : Backreporter Name ←
-  registerBackreporter fun cmds requests => do
-    for req in requests do
-      unless (← getEnv).contains req.data do
-        req.logWarning m!"`{req.data}` was never defined in this file"
-      req.markCompleted
-```
+Users of the API may send a request to a given `br : Backreporter` with
+`br.sendRequest (data : α) : CommandElabM Unit`, which sends a request carrying `data α` and creates the progress bar, which by default is at the command.
 
-Any command elaborator (in a file that imports the `initialize` above) can then file requests:
+`sendRequest` may optionally be provided with a `ProgressIndication` flag to specify the location via provided `ref : Syntax` (e.g. `.at ref`) or specify that no progress bar should be created at all (`.quiet`). (The request will still be filed and processed at the end of the file.)
 
-```lean
-elab "#expect_eventually " x:ident : command => do
-  stillAbsentReporter.sendRequest x.getId
-```
+Note: due to how Lean reuses command snapshots, the progress bar indicators associated with requests are not robust, and may remain cleared even if the requests must be reprocessed. For example, if a request is sent at some point in the file and the file is allowed to elaborate the completion (thus clearing the progress bar indicator), and then the file is interactively edited below the request site, we cannot make a progress bar indicator reappear at the request site above the edit. Thus no yellow bar will appear for this duration even though the request should be reprocessed at the end of the file.
 
-Messages logged via `Request.log*` appear at the requesting command, but are computed at the
-end of the file — here, warning on `#expect_eventually foo` only if `foo` never appears.
+Further, no progress bar (nor its associated promise) will be created when on the command line (when `Elab.inServer` is false) or when `Elab.async` is false.
 
-## Progress reporting
+As such, this means that the resolved state of the promise and/or its presence should not be used as an indicator of whether the request has been fulfilled.
 
-While the rest of the file elaborates, each requesting command is marked as in-progress (the
-"yellow bar" in editors), just like commands with asynchronously elaborated proofs. The bar
-clears once the backreporter has handled the request:
-
-* automatically, once the handler returns (or throws), or
-* eagerly, when the handler calls `Request.markCompleted` — useful for handlers that work
-  through many requests, so that each bar clears as soon as its request is actually handled.
-
-`markCompleted` is idempotent and optional; requests never handled by the handler are marked
-completed afterwards regardless. Pass `showProgress := false` to `sendRequest` to file a
-request with no progress indication at all.
-
-## What handlers can see
-
-Handlers receive the syntax of every command in the file and run against the *final*
-environment, after all elaboration has finished; this is what makes end-of-file answers
-possible. Some care is still needed:
-
-* Info trees of earlier commands are not available. Capture anything the report needs, beyond
-  the final environment and the file's syntax, in the request payload.
-* Any state the handler modifies is discarded; only its messages and traces are reported.
-* Handlers run at the end of *every* file that imports their `initialize` declaration, even
-  when no requests were filed (`requests` is then empty). This permits whole-file reports and
-  "an expected request never arrived" errors; handlers that are purely request-driven should
-  simply return when `requests.isEmpty`.
-* Handler messages (for every backreporter) are delivered together, once all of the file's
-  module linters have finished — `markCompleted` affects only progress reporting, not message
-  delivery.
-
-## Main declarations
-
-* `Backreporter`: token identifying a registered backreporter; required to file requests.
-* `registerBackreporter`: defines a backreporter (from an `initialize` block).
-* `Backreporter.sendRequest`: files a request from a command elaborator.
-* `Backreporter.Request`: a filed request, as seen by the handler: a syntax location to report
-  at (`Request.log*`), a typed payload, and completion state (`Request.markCompleted`).
+Progress indicators can be cleared manually with `Request.stopProgressIndicator`.
 
 ## Implementation notes
+
+-- TODO: rewrite
 
 A backreporter is a `ModuleLinter` plus a per-backreporter environment extension holding the
 file's requests. Storing requests in the environment (rather than, say, alongside the linter
@@ -99,139 +50,138 @@ elaboration of the rest of the file is abandoned) cannot block reporting.
 
 open Lean Elab Command Language
 
-public meta section
+public  section
 
 namespace ImportGraph
 
 namespace Backreporter
 
-/-- A single report-back request, as seen by a backreporter's handler. -/
-structure Request (α : Type) where private mk' ::
-  /-- The syntax the report should attach to; by default, the requesting command. -/
-  ref : Syntax
-  /-- The payload provided at request time. Since handlers only otherwise see the final
-  environment and the file's command syntax, anything else the report needs — names, positions,
-  elaborated data — should be captured here. -/
+/--
+A request, typically created by `Backreporter.sendRequest`, and stored in a `Backreporter`'s
+(non-persistent) environment extension to be processed by that `Backreporter` at the end of a file.
+It carries `data : α` to affect how it is processed and an optional private `IO.Promise` that
+governs an interactive progress bar indicator.
+
+`Request`s enable a command elaborator to send data to the end of the file while displaying to the
+user that processing is ongoing at the site the request was sent via the (yellow) progress bar
+indicator.
+-/
+structure Request (α : Type) where private mk ::
+  /-- The content of a `Request`, necessary for processing the request later on. -/
   data : α
-  /-- The promise backing this request's progress task, if progress was requested. `Unit`-typed
-  by design: resolving it signals completion and nothing else. Use `Request.markCompleted`. If
-  `Elab.async` is `false` when the request is created, this is `none`. -/
+  /-- The promise backing this request's progress task (usually corresponding to a yellow bar), if
+  progress was requested.
+
+  Resolving it does *not* necessarily signal fulfillment of the request. The request may need to be
+  re-processed due to interactive editing even though the snapshot (and thus promise) is reused.
+  (E.g., if the file is edited below the request's send site, but the request is processed at the
+  end of the file.) If request fulfillment information is needed mid-file, it should be recorded in
+  `data`.
+
+  Use `Request.stopProgressIndicator` to manually resolve the promise.
+
+  If `Elab.inServer` is `false` or `Elab.async` is `false` when the request is created, this is
+  `none`. -/
   private promise? : Option (IO.Promise Unit)
 
-/-- A request that carries no data. -/
-abbrev SimpleRequest := Request Unit
+/-- A request with no progress promise.
 
-/-- Creates a standalone request with no progress task, not filed with any backreporter — for
-example, to drive a handler directly in tests. To file a request, use
-`Backreporter.sendRequest`, which manages progress tasks via its `showProgress` flag. -/
-def Request.mkPure (ref : Syntax) (data : α) : Request α :=
-  { ref, data, promise? := none }
+To file a request, use `Backreporter.sendRequest`. -/
+@[inline] def Request.mkPure (data : α) : Request α :=
+  { data, promise? := none }
 
-/-- Creates a standalone simple request with no progress task, not filed with any backreporter —
-for example, to drive a handler directly in tests. To file a request, use
-`Backreporter.sendSimpleRequest`, which manages progress tasks via its `showProgress` flag. -/
-def SimpleRequest.mkPure (ref : Syntax) : SimpleRequest :=
-  { ref, data := (), promise? := none }
+/-- A request that uses the provided promise as its promise. `Request.sendRequest` should be
+preferred to constructing requests manually this way.
+
+To file a request, use `Backreporter.sendRequest`. -/
+@[inline] def Request.mkFromPromise (data : α) (promise : IO.Promise Unit) : Request α :=
+  { data, promise? := some promise }
 
 /--
-Marks this request as handled, clearing its progress bar now rather than when the handler
-returns. Call it as each request's processing completes so that progress clears in sync with
-actual completions. Optional and idempotent: every request is marked completed once the
-handler has run (even if it threw). Note that this affects progress reporting only — the
-handler's *messages* are all delivered together, once the file's module linters have finished.
--/
-def Request.markCompleted (req : Request α) : BaseIO Unit :=
-  req.promise?.forM (·.resolve ())
+Stops the progress indicator (yellow bar) for the given `Request`.
 
-/-- Whether this request was filed with a progress task (`sendRequest`'s `showProgress`). -/
-def Request.hasProgressTask (req : Request α) : Bool :=
+Note that the progress task cannot be resumed, even if the request ought to be reprocessed, e.g.
+due to interactive editing occurring after the request but before its intended processing site. As
+such this should not be used to request fulfillment.
+-/
+@[inline] def Request.stopProgressIndicator (r : Request α) : BaseIO Unit :=
+  r.promise?.forM (·.resolve ())
+
+/-- Whether this request was filed with a progress indicator (whether or not it has since been cleared). This may be `false` if e.g. `Elab.async` is `false`. -/
+@[inline] def Request.hasProgressIndicator (req : Request α) : Bool :=
   req.promise?.isSome
 
-/-- If this request has a progress task, whether it has been marked completed
-(see `Request.markCompleted`). Returns `none` if the request has no progress task. -/
-def Request.isComplete? (req : Request α) : BaseIO (Option Bool) :=
+/-- If this request has a progress bar indicator, whether it has been cleared.
+
+Note that progress indicators inevitably remain cleared even if the request ought to be reprocessed
+due to interactive editing. As such, the return value should **not** be used to determine whether a
+`Request` has been fulfilled.
+
+Returns `none` if the request has never had a progress task. -/
+@[inline] def Request.isCleared? (req : Request α) : BaseIO (Option Bool) :=
   req.promise?.mapM (·.isResolved)
-
-/-- `true` if this request has no progress task, or has a progress task that has not yet been
-marked completed (see `Request.markCompleted`). -/
-def Request.isPending (req : Request α) : BaseIO Bool :=
-  match req.promise? with
-  | none => pure true
-  | some promise => notM promise.isResolved
-
-/-- Logs a message at the request site; a thin wrapper around `logAt req.ref msg severity`. -/
-@[inline] def Request.log [Monad m] [MonadLog m] [AddMessageContext m] [MonadOptions m]
-    (req : Request α) (msg : MessageData) (severity : MessageSeverity := .information) :
-    m Unit :=
-  logAt req.ref msg severity
-
-@[inline, inherit_doc Request.log]
-def Request.logInfo (req : Request α) (msg : MessageData) : CommandElabM Unit :=
-  req.log msg .information
-
-@[inline, inherit_doc Request.log]
-def Request.logWarning (req : Request α) (msg : MessageData) : CommandElabM Unit :=
-  req.log msg .warning
-
-@[inline, inherit_doc Request.log]
-def Request.logError (req : Request α) (msg : MessageData) : CommandElabM Unit :=
-  req.log msg .error
-
-/-- Runs `f` on each pending request's data (no progress task or an incomplete progress task), with
-that request's `ref` as the ambient ref, and marks each request completed as soon as its `f` has
-finished — so progress clears request by request rather than all at once. Requests whose progress
-task is already marked completed are skipped; requests with no progress task count as always
-pending, so repeated calls run `f` on them again.
-
-If `f` throws, requests not yet visited are neither run nor marked completed here; when running
-inside a backreporter's handler, they are still marked completed once the handler exits. -/
-@[specialize]
-def Request.forPendingM [Monad m] [MonadRef m] [MonadLiftT BaseIO m] [MonadFinally m]
-    (requests : Array (Request α)) (f : Syntax → α → m Unit) : m Unit := do
-  for request in requests do
-    if ← request.isPending then
-      try
-        withRef request.ref <| f request.ref request.data
-      finally
-        request.markCompleted
 
 end Backreporter
 
 /--
-Token identifying a registered backreporter with payload type `α`; created by
-`registerBackreporter` and required to file requests via `Backreporter.sendRequest`.
+A `Backreporter` consists of
+
+1. a non-persistent environment extension that stores filed requests (data and optional progress-bar
+  promises)
+2. a handler `run : Array Syntax → Array (Backreporter.Request α) → CommandElabM Unit` that "
+  "fulfills" the registered requests, run at the end of the file in a `ModuleLinter`.
+
+Note that even the effects of request fulfillment are non-persistent, as `ModuleLinter`s cannot
+affect the environment. `Backreporter`s are designed for interactive use, and `Request`s carry
+`IO.Promise`s that govern progress bar indicators created at the site the request was sent. These
+are cleared at the end of the file when the handler is run. They may also be cleared earlier with
+`Request.stopProgressIndicator`.
+
+Note that due to how command snapshots are reused during elaboration, a progress indicator cannot
+be restarted once it has been resolved without re-sending the request. This means that interactive
+editing below the request site after the request has already been fulfilled at least once may
+require the request to be reprocessed (to e.g. log a new message), but the progress bar indicator
+will not reappear. Likewise, the resolved state of the progress bar indicator should not in general
+be used to determine whether a given request must be (re)processed or not.
 -/
 structure Backreporter (α : Type) where
-  /-- The backreporter's name, used to identify it in trace output. -/
+  /-- The backreporter's name, which is the same as the associated `ModuleLinter`'s name. -/
   name : Name
   /-- The handler: receives the syntax of every command in the file together with the requests
   filed during elaboration (in file order), and runs at the end of the file. Exposed here so
   that it can also be invoked directly, e.g. on requests built with `Request.mkPure`. -/
   run : Array Syntax → Array (Backreporter.Request α) → CommandElabM Unit
-  /-- The per-backreporter request registry. Requests live in the environment so that they are
-  rolled back and replayed correctly during interactive editing. -/
+  /-- Non-persistent extension which holds `Request`s (data & progress-bar promises). Assuming this
+  `Backreporter` was created with `registerBackreporter`, this extension is `.mainOnly`. -/
   ext : EnvExtension (Array (Backreporter.Request α))
 deriving Nonempty
 
-/-- A backreporter whose requests carry no data. -/
-abbrev SimpleBackreporter := Backreporter Unit
+/-- Gets the currently-filed `Request`s for the given `Backreporter`. -/
+@[inline] def Backreporter.getRequests {α} (env : Environment) (b : Backreporter α) :
+    Array (Request α) :=
+  b.ext.getState env
+
+/-- Modifies the current requests filed with the given `Backreporter`. Note that requests should
+only be added with `Backreporter.sendRequest`. -/
+@[inline] def Backreporter.modify {α} (env : Environment) (b : Backreporter α)
+    (f : Array (Request α) → Array (Request α)) (asyncDecl : Name := .anonymous) : Environment :=
+  b.ext.modifyState env f (asyncDecl := asyncDecl)
 
 /--
-Defines a backreporter: at the end of any file that imports this definition, `run` receives the
-syntax of every command in the file together with the requests filed during elaboration (in
-file order), and reports back — typically at each request's position, via `Request.log*`.
+Registers a `BackReporter` that can receive interactive `Request α`s (via a non-persistent
+environment extension, registered here) and handles them via `run` at the end of the file in a
+`ModuleLinter`. The first argument to `run` is the module's command syntax passed through from the
+`ModuleLinter`, and the second is the array of all `Request`s that have been filed.
 
-Must be called during initialization:
+Note that `run` has no access to info trees; if infotree information is necessary, it should be bundled into `α` so that it can be sent along with the request.
 
-```lean
-initialize myReporter : Backreporter Payload ←
-  registerBackreporter fun cmds requests => ...
-```
+Note that `run` should not use the resolved state of the `Request`'s progress bar to determine
+whether the request has been fulfilled, as interactive editing may require that the requests are
+reprocessed even after the progress bar indicator has been resolved. See `Backreporter` and
+`Request` for details.
 
-The handler runs against the file's final environment. It runs even when no requests were
-filed — return early on `requests.isEmpty` for purely request-driven behavior, or use the
-unconditional invocation for whole-file reports or to complain that an expected request never
-arrived. See the module docstring for more on what handlers can observe and report.
+All progress bar indicators are cleared by the `ModuleLinter` this function registers, and `run`
+does not need to do so.
 -/
 def registerBackreporter
     (run : Array Syntax → Array (Backreporter.Request α) → CommandElabM Unit)
@@ -245,61 +195,66 @@ def registerBackreporter
       try
         run cmds requests
       finally
-        -- Completion is guaranteed regardless of handler behavior; a request left pending
-        -- would freeze its command's progress bar until the next edit.
         for req in requests do
-          req.markCompleted
+          req.stopProgressIndicator
   }
   return { name, run, ext }
 
-@[inherit_doc registerBackreporter]
-def registerSimpleBackreporter
-    (run : Array Syntax → Array Backreporter.SimpleRequest → CommandElabM Unit)
-    (name : Name := by exact decl_name%) :
-    IO SimpleBackreporter :=
-  registerBackreporter run name
-
 namespace Backreporter
 
-/--
-Files a request with backreporter `b`, to be answered by its handler at the end of the file.
-The report attaches to `ref?` (default: the current command), and that range is marked as
-in-progress ("yellow bar") until the handler has handled the request (see
-`Request.markCompleted`). Pass `showProgress := false` to file the request without any
-progress indication — e.g. for purely informational aggregation where a lingering bar on the
-command would be noise.
+/-- Whether and how to show a progress indicator (yellow bar) in `Backreporter.sendRequest`.-/
+inductive ProgressIndication where
+  /-- Do not create or show any indicator. -/
+| quiet
+  /-- Show the indicator at the command currently being elaborated. -/
+| atCommand
+  /-- Show the indicator at the position of `ref`. `ref` may be non-canonical. However, it must be
+  within the current command being elaborated. Lean clamps ranges outside the current command range
+  to the command range. -/
+| at (ref : Syntax)
 
-Must be called at the command-elaboration level, not from inside an asynchronous elaboration
-branch (such as an async proof body).
+/-- The explicit syntax location to show progress, if there is one. `.atCommand` yields `none`. -/
+def ProgressIndication.toSyntax? : ProgressIndication → Option Syntax
+  | .at ref => ref
+  | _ => none
+
+/--
+Files a request with the given `Backreporter` with content `data`, which will be processed at the end of the file by `b.run`.
+
+By default, this shows a progress indicator (yellow bar) at the current command until requests are
+processed at the end of the file. This behavior can be controlled by providing
+`p : ProgressIndication`:
+- `.atCommand` (default): shows indicator at current command.
+- `.at (ref : Syntax)`: shows indicator at the location given by the position info of `Syntax`.
+- `.quiet`: does not show any indicator.
+
+Does not show an indicator under any circumstances if `Elab.inServer` is `false` or `Elab.async` is
+`false`, but still files the request, and the request will be processed.
 -/
 def sendRequest (b : Backreporter α) (data : α)
-    (ref? : Option Syntax := none) (showProgress : Bool := true) : CommandElabM Unit := do
-  let ref := ref?.getD (← getRef)
-  let promise? ← if !(Elab.async.get (← getOptions)) then pure none else
-    if showProgress then some <$> IO.Promise.new else pure none
-  modifyEnv fun env => b.ext.modifyState env (·.push { ref, data, promise? })
+    (progressIndication : ProgressIndication := .atCommand) :
+    CommandElabM Unit := do
+  let opts ← getOptions
+  let promise? ←
+    if !(Elab.inServer.get opts) || !(Elab.async.get opts) || progressIndication matches .quiet then
+      pure none
+    else some <$> IO.Promise.new
+  modifyEnv fun env => b.ext.modifyState env (·.push { data, promise? })
   if let some promise := promise? then
     -- An unfinished snapshot task over `ref` marks it as in-progress in the language server.
-    -- `resultD` (rather than `result!`) ensures the task finishes even if the promise is
-    -- dropped without resolution, e.g. when elaboration of the rest of the file is abandoned.
     logSnapshotTask {
-      stx? := some ref
+      -- `stx?` allows infotree lookup at `stx?` to force tasks, but we don't want to block there.
+      stx? := none
+      -- We want to use `ref?`'s range even if synthetic, whereas `defaultReportingRange` would
+      -- demand that it be `canonicalOnly`.
+      reportingRange := .ofOptionInheriting <| progressIndication.toSyntax?.bind (·.getRange?)
+      -- TODO: should we inherit from context?
       cancelTk? := none
+      -- `resultD` (rather than `result!`) ensures the task finishes even if the promise is
+      -- dropped without resolution, e.g. when elaboration of the rest of the file is abandoned.
       task := promise.resultD () |>.map (sync := true) fun _ =>
-        SnapshotTree.mk { desc := s!"backreport from {b.name}", diagnostics := .empty } #[]
+        SnapshotTree.mk { desc := s!"backreport from `{b.name}`", diagnostics := .empty } #[]
     }
-
-@[inline, inherit_doc Backreporter.sendRequest]
-def sendSimpleRequest (b : SimpleBackreporter)
-    (ref : Syntax) (showProgress : Bool := true) : CommandElabM Unit :=
-  sendRequest b () ref showProgress
-
-/--
-The requests filed with `b` so far in the current file that are still pending (see
-`Request.isPending`), in file order. Useful e.g. for deduplicating at request time.
--/
-def pendingRequests (b : Backreporter α) : CommandElabM (Array (Request α)) := do
-  b.ext.getState (← getEnv) |>.filterM (·.isPending)
 
 end Backreporter
 
