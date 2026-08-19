@@ -1,8 +1,8 @@
 module
 
-import all ImportGraph.Shake.Basic
+public import ImportGraph.Shake.Basic
 
-open Lean Lake.Shake
+open Lean ImportGraph Shake
 
 namespace ImportGraph.Shake
 
@@ -16,11 +16,60 @@ public protected class HTransClosure (α) (β) (γ : outParam (Type u)) where
 
 scoped notation:max I "⟦" n "⟧" => HTransClosure.htransClosure I n
 
-abbrev Hierarchy := Array Needs
+abbrev Hierarchy := Array Provides
+
+-- TODO: check
+def Lean.Import.addPostcompose (impTransDeps : Provides) (imp : Import)
+    (base : Provides := ∅) : Needs := Id.run do
+  let mut composed := base
+  let kImp := NeedsKind.ofImport imp
+  if h : kImp.isAll then
+    for h : k in NeedsKind.toPrivate do
+      composed := composed.union
+        (k.postcompose kImp (by
+          simp only [NeedsKind.toPrivate] at h
+          simp; grind))
+        (impTransDeps.get k) -- `{ j | j ⟦k⟫ · }`
+  else
+    for k in NeedsKind.toPublicTrans do -- `∀ (m, 1)`
+      composed := composed.union
+        { isMeta := k.isMeta || imp.isMeta
+          isExported := imp.isExported
+          isAll := false }
+        (impTransDeps.get k) -- `{ j ⟦m, 1⟫ · | j }`
+  return composed
+
+/-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Provides`), add to `base` the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible, taking into account `public` ⊆ `private`.
+
+Note that this does *not* add the original collection of prearrows to `base`. -/
+def Lean.Import.addPostcompose (impTransDeps : Provides) (imp : Import)
+    (base : Provides := ∅) : Needs := Id.run do
+  let mut composed := base
+  -- `⟦m, 1⟫[m', p⟩  ⇒  ⟦m ∨ m', p⟫`
+  let kImp := NeedsKind.ofImport imp
+  if h : kImp.isAll then
+    for k in NeedsKind.toPrivate do
+      composed := composed.union
+        (k.postcompose kImp)
+        (impTransDeps.get k) -- `{ j | j ⟦k⟫ ·}`
+  else
+    for k in NeedsKind.toPublicTrans do -- `∀ (m, 1)`
+      composed := composed.union
+        { isMeta := k.isMeta || imp.isMeta
+          isExported := imp.isExported
+          isAll := false }
+        (impTransDeps.get k) -- `{ j ⟦m, 1⟫ · | j }`
+
+  -- Maybe we should think about this as arrows with different domains instead?
+  -- `(j, 0)` vs. `(j, 1)`.
+  -- Arrows enriched in Bool for meta phase?
+  -- `(j, 0) ↦ (j, 0)` .privOfPriv
+  --
+  composed
 
 /-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), add to `base` the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible. -/
-def _root_.Lean.Import.addPostcompose (impTransDeps : Needs) (imp : Import) (base := Needs.empty) :
-    Needs := Id.run do
+def Lean.Import.addPostcomposeNoAll (impTransDeps : Needs) (imp : Import)
+    (base := Needs.empty) : Needs := Id.run do
   let mut composed := base
   -- `⟦m, 1⟫[m', p⟩  ⇒  ⟦m ∨ m', p⟫`
   for k' in #[NeedsKind.pub, .metaPub] do -- `∀ (m, 1)`
@@ -28,20 +77,21 @@ def _root_.Lean.Import.addPostcompose (impTransDeps : Needs) (imp : Import) (bas
       { isMeta := k'.isMeta || imp.isMeta, isExported := imp.isExported } -- `m' ∨ m, p`
       (impTransDeps.get k') -- `j ⟦m, 1⟫ ·`
   -- `⟦m, 0⟫[0, 2⟩  ⇒  ⟦m, 0⟫`
-  if imp.importAll && !imp.isMeta then -- only apply to `[0, 2⟩`
+  if imp.importAll && !imp.isMeta then -- only apply to `[0, 2⟩` -- SQ: why?
     for k in #[NeedsKind.priv, .metaPriv] do -- `∀ (m, 0)`
       composed := composed.union k (impTransDeps.get k)
   composed
 
 /-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), forms the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible. -/
-@[inline] def _root_.Lean.Import.postcompose (impTransDeps : Needs) (imp : Import) : Needs :=
+@[inline] def Lean.Import.postcompose
+    (impTransDeps : Needs) (imp : Import) : Needs :=
   imp.addPostcompose (base := .empty) impTransDeps
 
 scoped instance : Shake.HPostcomp Needs Import Needs where
   hpostcomp n imp := imp.postcompose n
 
 /-- Given an import hierarchy of arrows `j' ⟦_⟫ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j ⟦_⟫ i [imp⟩ ·`. -/
-@[inline] def _root_.Lean.Import.transitiveClosureSingle (i : Nat) (imp : Import)
+@[inline] def Lean.Import.transitiveClosureSingle (i : Nat) (imp : Import)
     (transDeps : Hierarchy) : Needs :=
   (.single i { imp with }) ∪ (transDeps[i]! ≫ imp)
 
@@ -54,7 +104,7 @@ scoped instance : Shake.HTransClosure Hierarchy (ModuleIdx × Import) Needs wher
 --   imp.addPostcompose (Needs.empty.union { imp with } {i}) transDeps[i]!
 
 /-- Given an abstract `NeedsKind` `⟦m, p⟫` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), forms the composed prearrows `j ⟦m',p'⟫⟦m,p⟫ ·` where composition is possible. -/
-def _root_.Lake.Shake.NeedsKind.postcompose (n : Needs) (k : NeedsKind) : Needs := Id.run do
+def NeedsKind.postcompose (n : Needs) (k : NeedsKind) : Needs := Id.run do
   let mut composed := .empty
   -- `⟦m, 1⟫⟦m', p⟫  ⇒  ⟦m ∨ m', p⟫`
   for m in #[NeedsKind.pub, .metaPub] do -- ∀ (m, 1)
@@ -67,7 +117,7 @@ scoped instance : Shake.HPostcomp Needs NeedsKind Needs where
   hpostcomp n k := k.postcompose n
 
 /-- Given a set of prearrows `i ⟦m, p⟫ ·` and an import hierarchy, includes in `base` the compositions of arrows `j ⟦m',p'⟫ i ⟦m,p⟫ ·` where composition is possible. -/
-def _root_.Lake.Shake.Needs.addPostcompose (transDeps : Hierarchy) (n : Needs)
+def Needs.addPostcompose (transDeps : Hierarchy) (n : Needs)
     (base := Needs.empty) : Needs := Id.run do
   let mut composed := base
   for (k, i) in n.highToLow do
@@ -75,17 +125,17 @@ def _root_.Lake.Shake.Needs.addPostcompose (transDeps : Hierarchy) (n : Needs)
   composed
 
 /-- Given a set of prearrows `i ⟦m, p⟫ ·` and an import hierarchy, forms the compositions of arrows `j ⟦m',p'⟫ i ⟦m,p⟫ ·` where composition is possible. -/
-@[inline] def _root_.Lake.Shake.Needs.postcompose (transDeps : Hierarchy) (n : Needs) : Needs :=
+@[inline] def Needs.postcompose (transDeps : Hierarchy) (n : Needs) : Needs :=
   n.addPostcompose (base := .empty) transDeps
 
 scoped instance : Shake.HPostcomp Hierarchy Needs Needs where
   hpostcomp transDeps n := n.postcompose transDeps
 
-@[inline] def _root_.Lake.Shake.Needs.addTransitiveClosure (base n : Needs) (transDeps : Hierarchy) : Needs :=
+@[inline] def Needs.addTransitiveClosure (base n : Needs) (transDeps : Hierarchy) : Needs :=
   n.addPostcompose (base := base ∪ n) transDeps
 
 /-- `n ∪ (transDeps ≫ n)` -/
-@[inline] def _root_.Lake.Shake.Needs.transitiveClosure (n : Needs) (transDeps : Hierarchy) : Needs :=
+@[inline] def Needs.transitiveClosure (n : Needs) (transDeps : Hierarchy) : Needs :=
   n.addPostcompose (base := n) transDeps
 
 scoped instance : Shake.HTransClosure Hierarchy Needs Needs where
