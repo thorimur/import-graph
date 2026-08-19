@@ -11,8 +11,8 @@ def _root_.Lean.Environment.transitiveClosureOf (env : Environment)
   imps.foldl (init := base) fun needs imp =>
     needs ∪ (transDeps⟦(env.getModuleIdx! imp.module, imp)⟧)
 
-@[inline] def _root_.Lean.Environment.transNeeds (env : Environment) (transDeps : Array Needs) :
-    Needs :=
+@[inline] def _root_.Lean.Environment.currentTransNeeds (env : Environment)
+    (transDeps : Array Needs) : Needs :=
   env.transitiveClosureOf env.header.imports transDeps
 
 /-
