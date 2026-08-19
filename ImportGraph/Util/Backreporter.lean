@@ -195,6 +195,7 @@ def registerBackreporter
       try
         run cmds requests
       finally
+        -- Unconditional, just in case.
         for req in requests do
           req.stopProgressIndicator
   }
