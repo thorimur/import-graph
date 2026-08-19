@@ -8,6 +8,8 @@ module
 public import Lean.Server.Rpc.RequestHandling
 public meta import Lean.Widget.UserWidget
 
+-- TODO: see if we should hack messagedata go-to-def on exprs
+
 open Lean
 
 public meta section
