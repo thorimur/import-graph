@@ -28,6 +28,8 @@ import ImportGraph.WorkspaceModel.Summary
 
 open Lean ImportGraph Lake
 
+-- TODO: explore making this a lake script or facet, since we're essentially loading the lake
+-- workspace twice by calling this with `lake exe`.
 public def main (args : List String) : IO UInt32 := do
   let wsDir : System.FilePath ← do
     match args with
