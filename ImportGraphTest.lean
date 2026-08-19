@@ -3,6 +3,7 @@ import ImportGraphTest.Dot
 import ImportGraphTest.FileWithTransitiveImports
 import ImportGraphTest.FindHome.Serve
 import ImportGraphTest.FromSource
+import ImportGraphTest.Backreporter
 import ImportGraphTest.Imports
 import ImportGraphTest.Unused
 import ImportGraphTest.Used
