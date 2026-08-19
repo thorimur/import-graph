@@ -1,4 +1,5 @@
 /build
+/scratch
 /lakefile.olean
 /lake-packages/*
 .lake/
