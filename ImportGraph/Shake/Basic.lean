@@ -1,6 +1,6 @@
 module
 
-import all Lake.CLI.Shake
+public import ImportGraph.Shake.Core
 
 /-!
 ## Utilities for Shake types
@@ -11,11 +11,13 @@ Note: Because it provides API for private definitions, this module must be impor
 `import all`.
 -/
 
-open Lean Lake.Shake
+open Lean ImportGraph Shake
+
+public section
 
 -- TODO: consider alternative implementations?
 /-- Counts the number of set bits in the binary representation of `n`. -/
-def Nat.numSetBits (n : Nat) : Nat := Id.run do
+def ImportGraph.Nat.numSetBits (n : Nat) : Nat := Id.run do
   let mut n := n
   let mut acc := 0
   while n != 0 do
@@ -23,7 +25,7 @@ def Nat.numSetBits (n : Nat) : Nat := Id.run do
     acc := acc + 1
   return acc
 
-namespace Lake.Shake
+namespace ImportGraph.Shake
 
 namespace Bitset
 
@@ -129,7 +131,7 @@ deriving Repr, Inhabited
 def highToLow (b : Bitset) : HighToLow := ⟨b⟩
 
 instance {m} [Monad m] : ForIn m HighToLow Nat where
-  forIn br b f := ForInStep.value <$> forInRev br.toBitset b f
+  forIn br b f := ForInStep.value <$> br.toBitset.forInRev b f
 
 @[specialize]
 protected def forIn {m} [Monad m] {β} (s : Bitset) (init : β)
@@ -155,7 +157,7 @@ deriving Repr, Inhabited
 def lowToHigh (b : Bitset) : LowToHigh := ⟨b⟩
 
 instance {m} [Monad m] : ForIn m LowToHigh Nat where
-  forIn b init f := ForInStep.value <$> forIn b.toBitset init f
+  forIn b init f := ForInStep.value <$> b.toBitset.forIn init f
 
 /-! ## Representations -/
 
@@ -214,7 +216,7 @@ structure HighToLow where
 def highToLow (b : Needs) : HighToLow := ⟨b⟩
 
 instance {m} [Monad m] : ForIn m HighToLow (NeedsKind × Nat) where
-  forIn needs init f := ForInStep.value <$> forInRev needs.toNeeds init f
+  forIn needs init f := ForInStep.value <$> needs.toNeeds.forInRev init f
 
 /-- Iterates through `NeedsKinds.all`, and for each `NeedsKind`, iterates through the set bit
 indices of the corresponding `Bitset` from lowest to highest. -/
@@ -237,7 +239,7 @@ structure LowToHigh where
 def lowToHigh (b : Needs) : LowToHigh := ⟨b⟩
 
 instance {m} [Monad m] : ForIn m LowToHigh (NeedsKind × Nat) where
-  forIn needs init f := ForInStep.value <$> forIn needs.toNeeds init f
+  forIn needs init f := ForInStep.value <$> needs.toNeeds.forIn init f
 
 /-! ## Operations -/
 
@@ -278,6 +280,8 @@ Rephrasing of `f (n.get k)` for readability. -/
   priv     := f n.priv
   metaPub  := f n.metaPub
   metaPriv := f n.metaPriv
+  privOfPriv     := f n.privOfPriv
+  metaPrivOfPriv := f n.metaPrivOfPriv
 
 /-- Applies `f` to all component `Bitset`s of the given `Needs` at their corresponding
 `NeedsKind`s. -/
@@ -286,6 +290,8 @@ Rephrasing of `f (n.get k)` for readability. -/
   priv     := f .priv n.priv
   metaPub  := f .metaPub n.metaPub
   metaPriv := f .metaPriv n.metaPriv
+  privOfPriv     := f .privOfPriv n.privOfPriv
+  metaPrivOfPriv := f .metaPrivOfPriv n.metaPrivOfPriv
 
 /-- Applies `f` "pointwise" to the pairs of bitsets at each given `NeedsKind`.
 `f (n₁.get k) (n₂.get k) = (n₁.map₂ n₂ f).get k` for all `k : NeedsKind`. -/
@@ -294,6 +300,8 @@ Rephrasing of `f (n.get k)` for readability. -/
   priv     := f n₁.priv n₂.priv
   metaPub  := f n₁.metaPub n₂.metaPub
   metaPriv := f n₁.metaPriv n₂.metaPriv
+  privOfPriv     := f n₁.privOfPriv n₂.privOfPriv
+  metaPrivOfPriv := f n₁.metaPrivOfPriv n₂.metaPrivOfPriv
 
 /-- Applies `f` "pointwise" to the pairs of bitsets at each given `NeedsKind`.
 `f k (n₁.get k) (n₂.get k) = (n₁.mapWithKind₂ n₂ f).get k` for all `k : NeedsKind`. -/
@@ -303,6 +311,8 @@ Rephrasing of `f (n.get k)` for readability. -/
   priv     := f .priv n₁.priv n₂.priv
   metaPub  := f .metaPub n₁.metaPub n₂.metaPub
   metaPriv := f .metaPriv n₁.metaPriv n₂.metaPriv
+  privOfPriv     := f .privOfPriv n₁.privOfPriv n₂.privOfPriv
+  metaPrivOfPriv := f .metaPrivOfPriv n₁.metaPrivOfPriv n₂.metaPrivOfPriv
 
 /-- Whether all component bitsets are empty. -/
 @[inline] def isEmpty (n : Needs) : Bool := n.all (·.isEmpty)
@@ -319,7 +329,9 @@ instance : SDiff Needs where
   n.pub.le m.pub &&
   n.priv.le m.priv &&
   n.metaPub.le m.metaPub &&
-  n.metaPriv.le m.metaPriv
+  n.metaPriv.le m.metaPriv &&
+  n.privOfPriv.le m.privOfPriv &&
+  n.metaPrivOfPriv.le m.metaPrivOfPriv
 
 theorem directLe_eq_allWithKind_le :
     directLe = fun n m => n.allWithKind fun k nb => nb.le <| m.get k := by
@@ -340,16 +352,118 @@ def toRawImports (env : Environment) (n : Needs) (skipInit := true) : Array Impo
 
 end Needs
 
+namespace Lean.Environment.Visibility
+
+@[inline] def all : Array Environment.Visibility := #[.private, .public]
+
+@[inline] def isExported : Environment.Visibility → Bool
+  | .public  => true
+  | .private => false
+
+instance : ToString Environment.Visibility where
+  toString
+    | .public      => "public"
+    | .private     => "private"
+
+/-- Whether the scope `v₁` includes the scope `v₂`. Note that `private` includes `public`. -/
+@[inline] def includes (v₁ v₂ : Environment.Visibility) : Bool :=
+  match v₁, v₂ with
+  | .private, _ => true
+  | .public, .public => true
+  | .public, .private => false
+
+end Lean.Environment.Visibility
+
+namespace NeedsKind
+
 instance : ToString NeedsKind where
   toString
     | .pub      => "public"
     | .metaPub  => "public meta"
     | .priv     => "private"
     | .metaPriv => "private meta"
+    | .privOfPriv     => "all"
+    | .metaPrivOfPriv => "meta all"
 
-end Lake.Shake
+/-- The `NeedsKind`s which land (directly) in the private scope. -/
+@[inline, expose] def toPrivate   : Array NeedsKind := #[.priv, .privOfPriv, .metaPriv, .metaPrivOfPriv]
+/-- The `NeedsKind`s which land (directly) in the public scope. -/
+@[inline, expose] def toPublic    : Array NeedsKind := #[.pub, .metaPub]
+/-- The `NeedsKind`s which (directly) demand the private scope. -/
+@[inline, expose] def fromPrivate : Array NeedsKind := #[.privOfPriv, .metaPrivOfPriv]
+/-- The `NeedsKind`s which (directly) demand the public scope. -/
+@[inline, expose] def fromPublic  : Array NeedsKind := #[.priv, .pub, .metaPriv, .metaPub]
 
-namespace ImportGraph.Lake.Shake
+/-- The `NeedsKind`s which land (directly) in the given scope. -/
+@[inline, expose] def to (vis : Environment.Visibility) : Array NeedsKind :=
+  match vis with
+  | .public  => toPublic
+  | .private => toPrivate
+/-- The `NeedsKind`s which (directly) demand the given scope. -/
+@[inline, expose] def «from» (vis : Environment.Visibility) : Array NeedsKind :=
+  match vis with
+  | .public  => fromPublic
+  | .private => fromPrivate
+
+/-- The `NeedsKind`s which land in the private scope after taking into account `public` ⊆ `private` on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
+@[inline] def toPrivateTrans   : Array NeedsKind := NeedsKind.all
+/-- The `NeedsKind`s which land in the public scope after taking into account `public` ⊆ `private` on both ends. This is simply `toPublic`, but can help record why we're using it. -/
+@[inline] def toPublicTrans    : Array NeedsKind := toPublic
+/-- The `NeedsKind`s which demand the private scope after taking into account `public` ⊆ `private` on both ends. -/
+@[inline] def fromPrivateTrans : Array NeedsKind := fromPrivate
+/-- The `NeedsKind`s which demand the public scope after taking into account `public` ⊆ `private` on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
+@[inline] def fromPublicTrans  : Array NeedsKind := NeedsKind.all
+
+/-- The scope (directly) demanded by the `NeedsKind`. -/
+@[inline, simp, expose] def source (k : NeedsKind) : Environment.Visibility :=
+  if k.isAll then .private else .public
+/-- The scope targeted by the `NeedsKind`. -/
+@[inline, simp, expose] def target (k : NeedsKind) : Environment.Visibility :=
+  if k.isExported then .public else .private
+
+/-- Whether `k` places the `src` in the `tgt` visibility, after taking into account `public` ⊆ `private` on both ends. Note that we abstractly consider `NeedsKind` to be a single arrow between scopes (i.e. `privOfPriv` only relates the private scope to the private scope), but in this function we allow linearization (i.e. composition with `public` ↪ `private`) -/
+@[inline] def connects (src tgt : Environment.Visibility) (k : NeedsKind) : Bool :=
+  match src, tgt with
+  | .public,  .private => true
+  | .public,  .public  => k.isExported
+  | .private, .private => k.isAll
+  | .private, .public  => false
+
+/-- Whether `k` yields something in the scope `tgt`. This is always true when `tgt` is `.private` thanks to `public` ⊆ `private` on the target side, and is `k.isExported` when `.public`. -/
+def yields (tgt : Environment.Visibility) (k : NeedsKind) : Bool :=
+  match tgt with
+  | .public  => k.isExported
+  | .private => true
+
+/-- Whether `k` demands something in the scope `src`. This is always true when `src` is `.public` thanks to `public` ⊆ `private` on the source side, and is `k.isAll` when `.private`. -/
+def demands (src : Environment.Visibility) (k : NeedsKind) : Bool :=
+  match src with
+  | .public  => true
+  | .private => k.isAll
+
+set_option linter.unusedVariables false in
+def postcompose (k₁ k₂ : NeedsKind) (connectable : k₁.target = k₂.source := by grind) :
+    NeedsKind where
+  isMeta := k₁.isMeta || k₂.isMeta
+  isExported := k₂.isExported
+  isAll := k₁.isAll && k₂.isAll
+  not_isExported_and_isAll := by grind [k₂.not_isExported_and_isAll]
+
+@[simp, grind =] theorem target_postcompose_eq_right_target (k₁ k₂ : NeedsKind)
+    (connectable : k₁.target = k₂.source) : (postcompose k₁ k₂).target = k₂.target := by
+  grind [target, postcompose]
+
+@[simp, grind =] theorem source_postcompose_eq_left_source (k₁ k₂ : NeedsKind)
+    (connectable : k₁.target = k₂.source) : (postcompose k₁ k₂).source = k₁.source := by
+  simp only [target, source] at connectable
+  grind only [source, postcompose, k₁.not_isExported_and_isAll]
+
+@[simp] theorem postcompose_assoc (k₁ k₂ k₃: NeedsKind)
+    (connectable₁₂ : k₁.target = k₂.source) (connectable₂₃ : k₂.target = k₃.source) :
+    (k₁.postcompose k₂).postcompose k₃ = k₁.postcompose (k₂.postcompose k₃) := by
+  grind only [postcompose, k₁.not_isExported_and_isAll]
+
+end NeedsKind
 
 -- TODO: potentially managing `Needs` differently elsewhere should remove the need for this,
 -- hence the reason we include it in `ImportGraph.Shake.Basic` and not another file.
@@ -366,4 +480,4 @@ def Import.includeAll (importsWithAll newImports : Array Import) : Array Import 
       newImports := newImports.push imp
   return newImports
 
-end ImportGraph.Lake.Shake
+end ImportGraph.Shake
