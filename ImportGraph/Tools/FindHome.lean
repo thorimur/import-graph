@@ -34,9 +34,16 @@ import all ImportGraph.Shake.Coverings
 import all ImportGraph.Tools.NeedsGrid
 public meta import ImportGraph.Tools.Collapsible
 public meta import ImportGraph.Tools.Copy
+meta import all ImportGraph.WorkspaceModel.Build
+import all ImportGraph.WorkspaceModel.Build
+public meta import ImportGraph.WorkspaceModel.Summary
+public meta import ImportGraph.WorkspaceModel.Model
+public meta import ImportGraph.WorkspaceModel.Build
 
 
-open Lean Lake Shake
+open Lean
+open Lake hiding logInfo
+open Shake
 
 /-
 # New design
@@ -185,7 +192,7 @@ elab "#show_imports" ppLine cmd:command : command => do
     fun extraNeeds declNeeds _ => return (extraNeeds, declNeeds)
   let needs := extraNeeds ∪ declNeeds.fullNeeds
   let reduced := needs.reduce transDeps |>.toRawImports (← getEnv)
-  logInfo m!"{declNeeds.keysArray.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+  Lean.logInfo m!"{declNeeds.keysArray.map MessageData.ofConstName}: {ImportGraph.Lean.Import.pretty reduced}"
 
 def _root_.Lean.MessageData.bulletedList (msgs : List MessageData) (forceList := true) :
     MessageData := Id.run do
@@ -362,7 +369,7 @@ elab_rules : command
   -- For more useful messages, we log on the whole command, so that the message appears
   -- in the infoview when the cursor is at any point within `#find_home for <command>`.
   else if minimals.all fun _ arr => arr.isEmpty then
-    logInfo m!"This command is as high in the import hierarchy as it can be \
+    Lean.logInfo m!"This command is as high in the import hierarchy as it can be \
       (among transitive imports to this file).\n\n`#find_home` attempted to move the following \
       new declarations:\
       {indentD <| .bulletedList (newDecls.toList.map .ofConstName)}\
@@ -385,7 +392,7 @@ elab_rules : command
         mkGoToModuleLink env.header.modules[idx]!.module lastPos
     let andItsDepsMsg := if auxDecls.isEmpty then "" else "(and its dependencies from this file) "
     let env ← getEnv
-    logInfo m!"{minimals.toArray.map fun (a, bs) =>
+    Lean.logInfo m!"{minimals.toArray.map fun (a, bs) =>
       (a, bs.map fun idx : ModuleIdx × Preceding => let idx := idx.1; env.header.modules[idx]!.module)}"
     for (root, mods) in minimals do
       if root == mainRoot || root.isAnonymous then continue -- handled separately; different message
@@ -407,7 +414,7 @@ elab_rules : command
     let moreInfo ← liftCoreM do
       let minImports ← do
         if reducedImps.isEmpty then pure m!"No imports required." else
-          collapsible "Minimal imports" (Import.prettyGrouped reducedImps)
+          collapsible "Minimal imports" (Lean.Import.pretty reducedImps)
       let producedConsts := m!"\nNew constants\
         {indentD <| .bulletedList (newDecls.toList.map MessageData.ofConstName)}"
       let auxDeclsMsg := if auxDecls.isEmpty then m!"" else
@@ -419,7 +426,7 @@ elab_rules : command
     let copySource ← liftCoreM do
       displayCopy s!"\n{source}\n" (display :=
         .text s!"[copy source{if auxDecls.isEmpty then "" else " - without dependencies"}]")
-    logInfo m!"{m!"\n\n".joinSep msgs.toList}\n\n{copySource}\n\n{moreInfo}"
+    Lean.logInfo m!"{m!"\n\n".joinSep msgs.toList}\n\n{copySource}\n\n{moreInfo}"
 
 
 -- TODO: Is there something fundamentally wrong about `calcDeclNeeds`? Why do we not need to know the *position* at which the declaration is used? Likewise, isn't there a way-of-needing the meta declarations which would let us say they were used in a meta position?
