@@ -1,0 +1,730 @@
+module
+
+meta import ImportGraph.Lean.Environment
+public import ImportGraph.Shake.Basic
+public import Lean.ExtraModUses -- TODO: move
+meta import Lean.Environment
+import Lean
+import Lean.ResolveName
+import all Lean.Compiler.LCNF.Visibility -- for `collectUsedDecls`
+
+/-!
+
+# TODO
+
+- Revamp indirect mod uses. Currently they are associated with the declaration indirectly requiring them and added to the decl import needs specially. Instead, we should split them out.
+- Split out extra mod uses into a special command needs. Also put the syntax needs there. These should not be decl needs.
+-/
+
+open Lean ImportGraph Shake
+
+namespace ImportGraph.Shake
+
+public section fromShake
+
+/-! This section is inlined from shake. -/
+
+-- SQ: what's the TODO mean?
+-- SQ: can a def be both meta and non-meta via implicit defs?
+def isDeclMeta' (env : Environment) (declName : Name) : Bool :=
+  -- Matchers are not compiled by themselves but inlined by the compiler, so there is no IR decl
+  -- to be tagged as `meta`.
+  -- TODO: It would be better to base the entire `meta` inference on the IR only and consider module
+  -- references from any other context as compatible with both phases.
+  let inferFor :=
+    if declName.isStr && (declName.getString!.startsWith "match_" || declName.getString! == "_unsafe_rec") then declName.getPrefix else declName
+  -- `isMarkedMeta` knows about non-defs such as `meta structure`, isDeclMeta knows about decls
+  -- implicitly marked meta
+  isMarkedMeta env inferFor || isDeclMeta env inferFor
+
+/--
+Given an `Expr` reference, returns the declaration name that should be considered the reference, if
+any, but from the environment directly.
+-/
+def Lean.Environment.getDepConstName? (ref : Name) (env : Environment) : Option Name := do
+  -- Ignore references to reserved names, they can be re-generated in-place
+  guard <| !isReservedName env ref
+  -- `_simp_...` constants are similar, use base decl instead
+  return if ref.isStr && ref.getString!.startsWith "_simp_" then
+    ref.getPrefix
+  else ref
+
+end fromShake
+
+public section
+
+/-- A way in which a declaration might demand an imported module. Note that there may be multiple demands on the same module from the same declaration, which thus may require multiple of these. -/
+structure DeclImportNeedsKind extends NeedsKind where
+  /-- A flag for the case where the ambient declaration needs a meta declaration from the needed
+  module. In that case, the import is allowed to be meta, but does not have to be. Note that
+  ordinary expression uses also `allowMeta`; it is only usage in the computational content (LCNF)
+  that will *disallow* meta and set this to false.
+
+  However, to allow `NeedsKinds` constructors to not conflict with `.allowMetaPub`, we set this to
+  `isMeta` by default. -/
+  allowMeta : Bool := isMeta
+  /-- Needing a meta import implies `allowMeta = true`. -/
+  allowMeta_if_isMeta : !isMeta || allowMeta := by grind
+
+namespace DeclImportNeedsKind
+
+@[expose] section matchers
+
+-- We give these distinct names to avoid ambiguity.
+@[match_pattern] def pubNoMeta : DeclImportNeedsKind :=
+  { NeedsKind.pub with allowMeta := false }
+@[match_pattern] def privNoMeta : DeclImportNeedsKind :=
+  { NeedsKind.priv with allowMeta := false }
+@[match_pattern] def privOfPrivNoMeta : DeclImportNeedsKind :=
+  { NeedsKind.privOfPriv with allowMeta := false }
+@[match_pattern] def metaPub : DeclImportNeedsKind :=
+  { NeedsKind.metaPub with }
+@[match_pattern] def metaPriv : DeclImportNeedsKind :=
+  { NeedsKind.metaPriv with }
+@[match_pattern] def metaPrivOfPriv : DeclImportNeedsKind :=
+  { NeedsKind.metaPrivOfPriv with }
+@[match_pattern] def pubAllowMeta : DeclImportNeedsKind :=
+  { NeedsKind.pub with allowMeta := true }
+@[match_pattern] def privAllowMeta : DeclImportNeedsKind :=
+  { NeedsKind.priv with allowMeta := true }
+@[match_pattern] def privOfPrivAllowMeta : DeclImportNeedsKind :=
+  { NeedsKind.privOfPriv with allowMeta := true }
+
+end matchers
+
+/-- Whether the `DeclImportNeedsKind` is provided by `p`. -/
+def providedBy (p : ProvisionKind) (k : DeclImportNeedsKind) : Bool :=
+  if k.isMeta then
+    if k.isExported then p.metaPub else
+      if k.isAll then p.metaPrivOfPriv else
+        p.metaPriv
+  else
+    if k.isExported then p.pub || k.allowMeta && p.metaPub else
+      if k.isAll then p.privOfPriv || k.allowMeta && p.metaPrivOfPriv else
+        p.priv || k.allowMeta && p.metaPriv
+
+end DeclImportNeedsKind
+
+def NeedsKind.toDeclImportNeedsKind (k : NeedsKind) (allowMeta : Bool) :
+    DeclImportNeedsKind :=
+  { k with allowMeta := k.isMeta || allowMeta }
+
+/-- Like `Needs`, but preserves `allowMeta`. We interpret `pub`/`priv`/`privOfPriv` from
+`NeedsKind` as having `allowMeta := false`, i.e. as specifically *disallowing* a meta import.  -/
+structure DeclImportNeeds extends Needs where
+  /-- The modules which may be imported as meta or non-meta which are needed in the public scope. -/
+  allowMetaPub : Bitset
+  /--
+  The modules which may be imported as meta or non-meta whose public scopes must be available in the current private scope.
+  -/
+  allowMetaPriv : Bitset
+  /--
+  The modules which may be imported as meta or non-meta whose private scopes must be available in the current private scope.
+  -/
+  allowMetaPrivOfPriv : Bitset
+deriving Inhabited, BEq, Repr
+
+namespace DeclImportNeeds
+
+def empty : DeclImportNeeds :=
+  { Needs.empty with allowMetaPub := ∅, allowMetaPriv := ∅, allowMetaPrivOfPriv := ∅ }
+
+instance : EmptyCollection DeclImportNeeds := ⟨.empty⟩
+
+/-- Assumes that `Provides` is well-formed, i.e. is linearized and transitively closed. -/
+@[inline] def isProvidedBy (n : DeclImportNeeds) (p : Provides) :=
+  n.metaPub ⊆ p.metaPub
+    && n.metaPriv ⊆ p.metaPriv
+    && n.metaPrivOfPriv ⊆ p.metaPrivOfPriv
+    && n.pub ⊆ p.pub && n.allowMetaPub ⊆ p.pub ∪ p.metaPub
+    && n.priv ⊆ p.priv && n.allowMetaPriv ⊆ p.priv ∪ p.metaPriv
+    && n.privOfPriv ⊆ p.privOfPriv && n.allowMetaPrivOfPriv ⊆ p.privOfPriv ∪ p.metaPrivOfPriv
+
+@[inline, expose] def get (needs : DeclImportNeeds) (k : DeclImportNeedsKind) : Bitset :=
+  match k with
+  | .pubNoMeta => needs.pub
+  | .privNoMeta => needs.priv
+  | .metaPub => needs.metaPub
+  | .metaPriv => needs.metaPriv
+  | .privOfPrivNoMeta => needs.privOfPriv
+  | .metaPrivOfPriv => needs.metaPrivOfPriv
+  | .pubAllowMeta => needs.allowMetaPub
+  | .privAllowMeta => needs.allowMetaPriv
+  | .privOfPrivAllowMeta => needs.allowMetaPrivOfPriv
+
+@[inline, expose] def has (needs : DeclImportNeeds) (k : DeclImportNeedsKind) (i : ModuleIdx) :
+    Bool :=
+  needs.get k |>.has i
+
+@[inline, expose] def set (needs : DeclImportNeeds) (k : DeclImportNeedsKind) (s : Bitset) :
+    DeclImportNeeds :=
+  match k with
+  | .pubNoMeta   => { needs with pub := s }
+  | .privNoMeta  => { needs with priv := s }
+  | .metaPub => { needs with metaPub := s }
+  | .metaPriv => { needs with metaPriv := s }
+  | .privOfPrivNoMeta => { needs with privOfPriv := s }
+  | .metaPrivOfPriv => { needs with metaPrivOfPriv := s }
+  | .pubAllowMeta => { needs with allowMetaPub := s }
+  | .privAllowMeta => { needs with allowMetaPriv := s }
+  | .privOfPrivAllowMeta => { needs with allowMetaPrivOfPriv := s }
+
+-- TODO: check if this successfully ekes out a little extra performance by having an explicit match
+@[specialize] def modify (needs : DeclImportNeeds) (k : DeclImportNeedsKind) (f : Bitset → Bitset) :
+    DeclImportNeeds :=
+  match k with
+  | .pubNoMeta   => { needs with pub := f needs.pub }
+  | .privNoMeta  => { needs with priv := f needs.priv }
+  | .metaPub => { needs with metaPub := f needs.metaPub }
+  | .metaPriv => { needs with metaPriv := f needs.metaPriv }
+  | .privOfPrivNoMeta => { needs with privOfPriv := f needs.privOfPriv }
+  | .metaPrivOfPriv => { needs with metaPrivOfPriv := f needs.metaPrivOfPriv }
+  | .pubAllowMeta => { needs with allowMetaPub := f needs.allowMetaPub }
+  | .privAllowMeta => { needs with allowMetaPriv := f needs.allowMetaPriv }
+  | .privOfPrivAllowMeta => { needs with allowMetaPrivOfPriv := f needs.allowMetaPrivOfPriv }
+
+
+def union (needs : DeclImportNeeds) (k : DeclImportNeedsKind) (s : Bitset) : DeclImportNeeds :=
+  needs.modify k (· ∪ s)
+
+end DeclImportNeeds
+
+-- TODO: might not need this.
+-- /-- A position at which a declaration `tgt` might need another declaration `src`. In general, the
+-- same `src` and `tgt` may be related by multiple `DeclDeclNeedsPos`s. -/
+-- inductive DeclDeclNeedsPos where
+-- | /-- `tgt` uses `src` in its type. -/  type
+-- | /-- `tgt` uses `src` in its value. -/ value
+-- | /-- `tgt` uses `src` in its LCNF. -/  lcnf
+
+local instance : Ord Name := ⟨Name.quickCmp⟩
+
+-- TODO: we should potentially record these separately; after all, one comes from the command whereas one comes from the expression, and is more closely associated with the declaration.
+
+-- TODO: move to better location
+deriving instance Repr, Hashable, Ord for IndirectModUse
+deriving instance Ord for Syntax.Range
+
+/-- Information about the source of a compile-time dependency. -/
+inductive ComptimeDependency where
+| /-- A potential compile-time dependency due to an indirect mod use.
+  `imposingModule` records the module that imposed the indirect mod use (not the source module of
+  the declaration). -/
+  indirect (use : IndirectModUse) (imposingModules : Array Name)
+| /-- A compile-time dependency due to parsing. -/
+  stx (kind : SyntaxNodeKind) (pos? : Option Syntax.Range) -- TODO: just record syntax?
+deriving Inhabited, BEq, Repr, Hashable, Ord
+
+/-
+/--
+  This expresses a meta LCNF reference need. (We do not consider non-meta LCNF needs, at least for now.) I.e., `tgt` references `src` in its LCNF.
+
+  Note a quirk about handling `.metaLCNF (isExported := true)`: a `public meta` definition `tgt` is allowed to have this need of a `private meta` declaration `src` as long as `src` is *from the same module* (since this induces the private meta decl's LCNF to be exported). This is not allowed across a module boundary.
+
+  Further, `tgt` then needs `src`'s dependencies at `.metaLCNF (isExported := true)` (i.e. that they are `public meta import`ed), even though `src` per se doesn't. This only needs to be addressed by `tgt` itself if `src` is private and `tgt` is public, and they are in the same module.
+
+  We record this separately to handle inlining of constants into LCNF, which affects the necessary dependencies. Suppose `public def inlinableFoo` is imported from `A`. Then
+  ```
+  module
+  meta import A
+
+  meta def a := f inlinableFoo
+
+  public meta def b := g a
+  ```
+  is accepted, since `inlinableFoo` is inlined into the exported LCNF of `a` and thus does not need to be re-meta-exported to downstream consumers by the import of `A`. In this case, we have:
+  - `a`'s need of `inlinableFoo`:
+    `.expr (isExported := false) (isMeta := true)`
+  - `a`'s need of `inlinableFoo`'s dependencies (since they've been inlined in `a`'s LCNF):
+    `.metaLCNF (isExported := false)`
+  - `b`'s needs of `a`:
+    `.expr (isExported := false) (isMeta := true)`
+    `.metaLCNF (isExported := true)`
+  - `b`'s need of `inlinableFoo`:
+    (no dependencies)
+  - `b`'s need of `inlinableFoo`'s inlined dependencies in `a`:
+    ``.metaLCNF (isExported := true) (through := [`a])``
+
+  If `inlinableFoo` were just `foo` and *not* inlinable, `b` would need `foo` at
+  ``.metaLCNF (isExported := true) (through := [`a])`` (and not need its dependencies).
+
+  We might get rid of `through` if it is not helpful.
+  -/
+  lcnf (isExported isMeta : Bool) (through : List Name := [])
+-/
+
+inductive ConstLocation where | type | value
+deriving Inhabited, BEq, Repr, Hashable, Ord
+
+/-- A way in which a declaration `tgt` might need another declaration `src`. In general, the same `src` and `tgt` may be related by multiple `DeclDeclNeedsKind`s. -/
+inductive DeclDeclNeedsKind where
+| expr (downstream : ConstLocation) (isReExported : Option Bool := none)
+  (upstream : ConstLocation := .type)
+-- | /-- Expresses a dependency of `tgt` on `src` through `tgt`'s type. `isReExported := none`
+--   indicates that the exported value is inherited from `tgt`'s `isPublic` stance. (Occasionally this will be `some false` if, for example, a proof is abstracted, since we count the dependencies of autogenerated declarations as part of the parent declaration.) -/
+--   typeExpr (isReExported : Option Bool := none)
+-- | /-- Expresses a dependency of `tgt` on `src` through `tgt`'s value. `isReExported := none`
+--   indicates that whether this dependency is re-exported is inherited from `tgt`'s `isExposed` stance. -/
+--   valueExpr (isReExported : Option Bool := none)
+| /-- Expresses a dependency of `tgt` on `src` due to the IR of `tgt`, which is meta-available. When
+  `isReExported := none`, this is inherited from the `tgt`'s `isPublic` stance (the same as its type, not its value.)
+
+  Meta IR is unusual in that while a private meta def may not re-export its references, a public meta def that uses that private meta def will re-export that private meta def's references. Note, also, that this dependency is determined by Lean from the initial LCNF (unless a same-module transitive dependency, in which case it is determined from that declaration's base LCNF), but is intended to capture IR dependency. -/
+  metaIR (isReExported : Option Bool := none) (through : List Name := [])
+| /-- Expresses a dependency of `tgt` on `src` in the IR of `tgt`, which is only available at
+  runtime. This does not have the complicated reference semantics of IR used for meta declarations. We assume, for now, that we do not need to think about changing runtime defs to meta defs, and thus do not need to record the same information. As such, `checkMeta`s recursive check for non-aux decls is irrelevant, as the runtime IR constraints such a recursive check puts on a reference are redundant with the runtime IR constraints that already exist on that reference. However, note that, like meta declarations, this dependency is determined by Lean from the initial LCNF, though is intended to capture IR dependency. -/
+  runtimeIR
+| /--
+  A compile-time dependency of `tgt` (e.g. a parser used for notation in the command for  `tgt`).
+
+  If this arises due to an indirect mod use, we record the declaration that demanded it (if we
+  can). Note that shake extensions do not expose this; this is known during the expression
+  traversal. So some indirect mod uses will end up in `extraModUses` without any indication as to
+  the declaration that drew them (at least, not in a way that's accessible to us, though this
+  information is traced by shake).
+
+  We record this separately mainly for reporting.
+  -/
+  comptime (source : ComptimeDependency)
+-- TODO: demands due to inlining. This may change soon, hence is not modeled.
+-- | /--
+--   A dependency in the LCNF, where `isReExported` captures the `isTransparent` behavior.
+--   -/
+--   lcnf (isReExported : Option Bool := none)
+deriving Inhabited, BEq, Repr, Hashable, Ord
+
+namespace DeclDeclNeedsKind
+
+-- PIPELINE:
+
+/-
+- [x] Extract stances of decls
+- [x] Extract DeclNeeds of declarations (includes indirect mod uses)
+- [x] Extract extra mod uses
+- [x] Extract syntax comptime dependencies
+
+- [ ] Convert stances + declneeds to concretized DeclImportNeeds s.t. import needs satisfied =>
+- [ ] For recursive declarations: must figure out which minimality we care about i guess...
+- [ ] Allow swapping out games. I think actually the game must allow returns not just of win/lose, but also how?
+- [x] handle reserved/realized names + autogenerated names
+- [ ] remember to add indirect mod uses to decl needs!
+- [x] gather declneeds from command
+- [ ] turn declneeds into declImportNeeds
+- [ ] play game to figure out where it belongs
+
+-/
+
+-- /-- Whether the reference to the source declaration is re-exported. If `none`, this is inherited from the relevant position. -/
+-- @[inline] protected def isReExported? : DeclDeclNeedsKind → Option Bool
+--   | .typeExpr isReExported | .valueExpr isReExported
+--   | .metaIR (isReExported := isReExported) .. => isReExported
+--   | .runtimeIR | .comptime _ => false
+
+/-- `some .comptime` if this demands the source declaration's `IRPhases` includes `.comptime`; `some .runtime` if this demands the source declaration's `IRPhases` includes `.runtime`. (`.all` includes both.) `none` if there is no demand either way (as is the case for expressions). -/
+@[inline] protected def irPhaseNeeds? : DeclDeclNeedsKind → Option IRPhases
+  | .expr .. => none
+  | .metaIR .. | .comptime .. => some .comptime
+  | .runtimeIR => some .runtime
+
+-- TODO: we could pass in a structure here that has `isExported, isMeta` (the original `NeedsKind`).
+
+-- TODO: not clear we need this...
+
+-- TODO: we might not need this section at all, yet.
+-- After all, if we can go directly from the intrinsic data about the declarations involved to
+-- import needs, we can just act on the hierarchy.
+-- This may be necessary if we start mutating declaration's visibilities.
+-- section provisioned
+
+-- structure DeclProvisionedKind where
+--   visibility : Environment.Visibility
+--   irPhases : IRPhases
+
+-- -- Hang on. Each of these handles a different part of `DeclProvisionedKind`. We can probably do better.
+-- /-- Whether `src` being provisioned according to `DeclProvisionedKind` satsifies the `DeclDeclNeedsKind`. -/
+-- def satisfies (src : DeclProvisionedKind) : DeclDeclNeedsKind → Bool
+--   | .expr isExported => !isExported || src.expr.isExported
+--   | .lcnf isExported isMeta _ => src.lcnf?.any fun lcnf =>
+--     (!isExported || lcnf.isExported || lcnf.isLocal) && (isMeta == lcnf.isMeta)
+--   | .comptime _ => src.irPhases != .runtime
+
+-- TODO
+-- def toDeclProvisionedKind (src : VisibilityPhase) (via : NeedsKind) : DeclProvisionedKind
+
+-- end provisioned
+
+
+end DeclDeclNeedsKind
+
+-- -- This decl needs these declarations at these availabilities from these modules, implying an overall `Needs` by incorporating each module. However, we don't know yet what modules some of the declarations are going to come from.
+-- -- Indirect module uses—maybe we should record these separately?
+-- deriving instance Ord for NeedsKind
+
+-- TODO
+
+/-- The intrinsic information that determines subsequent placement under different manners of import. -/
+structure Stance where
+  /-- Whether the declaration is public or not. We assume we are only discussing declarations that
+  appear in the environment. (If we want to relax this in the future, this might become
+  `Option Bool`.) -/
+  isPublic : Bool
+  /-- Whether the declaration is exposed. `none` if the notion of exposure does not apply (e.g. a
+  theorem). -/
+  isExposed : Option Bool
+  /-- Only public declarations can be exposed. -/
+  isPublic_if_isExposed : (isExposed != some true) || isPublic := by
+    grind [Stance.isPublic, Stance.isExposed]
+  /-- Whether the declaration is meta, i.e. has exported IR. `none` if there is no IR to be
+  exported. If `some false`, the declaration has runtime IR. -/
+  isMeta : Option Bool
+  -- /-- Whether the declaration is transparent, i.e. whether its LCNF body is available. Currently we only care about the base phase of LCNF. (This may not be fully general.) `none` if there is no code this applies to. -/
+  -- isTransparent : Option Bool
+  /-- A flag indicating whether this is the exact stance (determined within the same module) or a lower bound. -/
+  isExact := true
+
+@[expose, macro_inline, grind] public def Stance.isPrivate (s : Stance) := !s.isPublic
+
+/-- A set of declaration needs. -/
+/- TODO: make this more efficient, ideally a tiny `BitsetOf`, if such API were created. Also consider just a small `List` or `Array` that avoids duplication at insertion time. -/
+abbrev DeclDeclNeedsKindSet := Std.TreeSet DeclDeclNeedsKind
+
+/-- The demands of a single declaration, organized to facilitate movement. Free declarations are those whose modules may change; fixed ones must remain in the same module. -/
+structure DeclNeed where
+  /-- Declarations whose location may be altered. -/
+  freeDecls : NameMap DeclDeclNeedsKindSet := {}
+  -- TODO: more efficient data structure?
+  /-- Declarations whose location may not be altered. A map
+  `[module name] ↦ [needs of declarations from that module]`. -/
+  fixedDecls : Std.TreeMap Name (NameMap DeclDeclNeedsKindSet) := {}
+  /--
+  Extra module uses recorded in shake extensions during the command. Note that if several
+  declarations were created during the command, the extra mod uses are the same among all of them.
+  -/
+  -- TODO: more performant implementation
+  extraModUses : NameMap (Std.TreeSet NeedsKind) := {}
+deriving Inhabited
+
+/-- Records that the ambient declaration needs the declaration `decl` at availability `k`, where the module of `decl` is left free. -/
+@[inline] def DeclNeed.insertFreeDecl (k : DeclDeclNeedsKind) (decl : Name) (declNeed : DeclNeed) :
+    DeclNeed :=
+  { declNeed with freeDecls := declNeed.freeDecls.alter decl fun
+    set? => set?.getD {} |>.insert k }
+
+/-- Records that the ambient declaration needs the imported declaration `decl` from module `i` at availability `k`, where `decl` is expected to stay in `i`. -/
+def DeclNeed.insertFixedDecl (k : DeclDeclNeedsKind) (mod : Name) (decl : Name)
+    (declNeed : DeclNeed) : DeclNeed :=
+  { declNeed with
+    fixedDecls := declNeed.fixedDecls.alter mod fun map? =>
+      some <| map?.getD {} |>.alter decl fun set? =>
+        set?.getD {} |>.insert k }
+
+def DeclNeed.insertExtraModUses (extraModUses : Array ExtraModUse) (declNeed : DeclNeed) :
+    DeclNeed :=
+  { declNeed with
+    extraModUses :=
+      extraModUses.foldl (init := declNeed.extraModUses) fun extraModUseMap extraModUse =>
+        extraModUseMap.alter extraModUse.module fun ks? =>
+          ks?.getD {} |>.insert { extraModUse with } }
+
+/-- A collection of needs per declaration. -/
+-- TODO: more efficient data structure
+abbrev DeclNeeds := NameMap DeclNeed
+
+@[inline] def DeclNeeds.insertFreeDeclFor (currentDecl : Name) (k : DeclDeclNeedsKind)
+    (usedDecl : Name) (declNeeds : DeclNeeds) : DeclNeeds :=
+  declNeeds.alter currentDecl fun need? => need?.getD {} |>.insertFreeDecl k usedDecl
+
+@[inline] def DeclNeeds.insertFixedDeclFor (currentDecl : Name) (k : DeclDeclNeedsKind)
+    (mod : Name) (usedDecl : Name) (declNeeds : DeclNeeds) :
+    DeclNeeds :=
+  declNeeds.alter currentDecl fun need? => need?.getD {} |>.insertFixedDecl k mod usedDecl
+
+@[inline] def DeclNeeds.insertExtraModUsesFor (decl : Name) (extraModUses : Array ExtraModUse)
+  (declNeeds : DeclNeeds) : DeclNeeds :=
+  declNeeds.alter decl fun need? => need?.getD {} |>.insertExtraModUses extraModUses
+
+-- structure ModuleNeed where
+--   /-- The name of the declaration that was used, implying the need for this module directly. -/
+--   -- TODO: `ModuleIdx` is redundant given the env. Exclude it?
+--   usedDecl : Name
+--   /-- The module index of the needed module, or `none` if from the current module. -/
+--   -- TODO: use module name instead?
+--   idx? : Option ModuleIdx
+--   /-- The availability the module is needed at, after accountign for intrinsic availabilities. -/
+--   -- TODO: maybe we should flip this; have API that says "attach this module at this availabiltiy to this decl" intead of potentially duplicating modules.
+--   availability : NeedsKind
+--   /-- The indirectly-used modules. -/
+--   indirect : Array ModuleIdx := #[]
+
+-- /-- Given the intrinsic availability of `usedDecl`, what demanding a use of this decl at
+-- `demanding : NeedsKind` implies in terms of needed modules. -/
+-- def Lean.Environment.getModuleDepOfConst (usedDecl : Name) (demanding : NeedsKind)
+--     (env : Environment) : Option ModuleNeed := do
+--   let usedDecl ← env.getDepConstName? usedDecl
+--   let idx? := env.getModuleIdxFor? usedDecl
+--   let availability := { demanding with isMeta := demanding.isMeta && !isDeclMeta' env usedDecl }
+--   return {
+--     usedDecl, idx?, availability
+--     indirect := (indirectModUseExt.getState env)[usedDecl]?.getD #[] }
+
+-- The thing is that isExported for LCNF essentially changes with private availability!
+-- When the private scope is available, private definitions are able to satisfy a need for exported code.
+
+/-- Returns `false` if `s.isExposed = none`. Because of that, this is **not** necessarily equivalent
+to `!(s.isPrivateAt loc)`. -/
+def Stance.isPublicAt (s : Stance) : ConstLocation → Bool
+  | .type  => s.isPublic
+  | .value => s.isExposed.getD false
+
+/-- Returns `false` if `s.isExposed = none`. Because of that, this is **not** necessarily equivalent
+to `!(s.isPublicAt loc)`. -/
+def Stance.isPrivateAt (s : Stance) : ConstLocation → Bool
+  | .type  => !s.isPublic
+  | .value => !(s.isExposed.getD true)
+
+/-- Finds the stance of the given declaration, assuming `decl` is not imported. Returns `none` if `decl` is either not in the environment or is imported. -/
+def findStanceOfNonImported? (decl : Name) : CoreM (Option Stance) :=
+  withoutExporting do
+  let env ← getEnv
+  if env.isImportedConst decl || !env.contains decl then return none
+  -- From `calcNeeds`:
+  -- Added guard for cases like `structure` that are still exported even if private
+  let pubCI? := guard (!isPrivateName decl) *> (env.setExporting true).find? decl
+  let isPublic := pubCI?.isSome
+  let isExposed := pubCI?.bind fun ci => if ci.isDefinition then ci.hasValue else none
+  -- TODO: might be the wrong question.
+  -- Also, should consider: are we handling implemented_by, matcher inlining, and macro_inline correctly?
+  let isMeta :=
+    if ← pure !(isNoncomputable env decl) <&&> Compiler.LCNF.shouldGenerateCode decl then
+      some (isMarkedMeta env decl) else none
+  return some { isPublic, isExposed, isMeta, isPublic_if_isExposed := by grind [Option] }
+
+open Compiler in
+/-- Like `shouldGenerateCode`, but for imported constants. -/
+def shouldHaveGeneratedCode (declName : Name) : CoreM Bool := do
+  if (← isCompIrrelevant |>.run') then return false
+  let env ← getEnv
+  if isExtern env declName then return true
+  -- This is the only different part of the code.
+  -- Infers what the outcome of the check for a value would have been.
+  let some kind := getOriginalConstKind? env declName | return false
+  unless kind == .defn || kind == .opaque do return false
+  if hasMacroInlineAttribute env declName then return false
+  if (getImplementedBy? env declName).isSome then return false
+  if (← Meta.isMatcher declName) then return false
+  if (← Meta.isMatcherLike declName) then return false
+  if isCasesOnLike env declName then return false
+  -- TODO: check if type class instance
+  return true
+where
+  isCompIrrelevant : MetaM Bool := do
+    let info ← getConstInfo declName
+    Meta.isProp info.type <||> Meta.isTypeFormerType info.type
+
+/-- Approximates the stance of the imported declaration `decl` by a "lower bound". This means that we assume that any "extra information" is due to provisioning rather than the stance. For example, an `import all` will provide the body of every definition regardless of whether it is exposed or not. We therefore assume it is *not* exposed and that `import all` is doing the work. This allows us to ensure we have the imports we need. In most cases, however, this lower bound is sharp and matches the actual stance. -/
+-- TODO: record when a stance is approximated.
+def findLowerBoundStanceOfImported? (decl : Name) : CoreM (Option Stance) :=
+  withoutExporting do
+  let env ← getEnv
+  let some idx := env.getModuleIdxFor? decl | return none
+  let mod := env.header.modules[idx]!
+  unless mod.hasData do return none
+  unless env.contains decl do return none -- exclude compiler defs as well
+  let isMeta :=
+    -- TODO: use `isDeclMeta'` or not?
+    if ← pure !(isNoncomputable env decl) <&&> shouldHaveGeneratedCode decl then
+      some (isMarkedMeta env decl) else none
+  if !mod.importAll then
+    letI isPublic := true -- It must be public if we can see it
+    -- Look in the private scope as well in case it's imported privately
+    -- (This is why `hasExposedBody` is wrong downstream)
+    -- This is redundant given the outer `withExporting`, but for readability.
+    let isExposed := (env.setExporting false).find? decl |>.any (·.hasValue)
+    return some {
+      isPublic, isExposed, isMeta, isPublic_if_isExposed := by grind [Option]
+      isExact := true }
+  else
+    -- We demand a public name to be considered public.
+    -- If publicly imported, exposure is determined by whether it has a value.
+    -- If privately imported, we assume that exposure is the `import all`'s doing.
+    let ci? := guard (!isPrivateName decl) *>
+      (((env.setExporting true).find? decl).map (·.hasValue)
+        <|> ((env.setExporting false).find? decl).map fun _ => false)
+    let isPublic := ci?.isSome
+    let kind? := getOriginalConstKind? env decl
+    let isExposable := kind?.isEqSome .defn || kind?.isEqSome .opaque
+    let isExposed := if isExposable then ci? else none
+    return some {
+      isPublic, isExposed, isMeta, isPublic_if_isExposed := by grind [Option]
+      isExact := false }
+
+/-- The `DeclImportNeedsKind` implied by a downstream constant with stance `downstreamStance` demanding a declaration with stance `upstreamStance` via `demand : DeclDeclNeedsKind`. Assumes that the demand is satisfiable by the upstream declaration (e.g. that we are not trying to use an intrinsically private declaration in a public position).
+
+Note that this does not account for indirect module uses. -/
+def Stance.toDeclImportNeedsKind
+    (downstreamStance : Stance) (demand : DeclDeclNeedsKind) (upstreamStance : Stance) :
+    -- TODO: optional argument `(allowExprPhaseMixing := true)`
+    DeclImportNeedsKind :=
+  match demand with
+  | .expr downstreamLoc isReExported upstreamLoc =>
+    let isExported := isReExported.getD <| downstreamStance.isPublicAt downstreamLoc
+    { isExported
+      isAll := !isExported && upstreamStance.isPrivateAt upstreamLoc
+      isMeta := false, allowMeta := true }
+  | .runtimeIR =>
+    { isExported := false
+      isAll := upstreamStance.isPrivate
+      isMeta := false, allowMeta := false } -- Note: can't mix phases, hence `allowMeta := false`
+  | .metaIR isReExported _ =>
+    let isExported := isReExported.getD <| downstreamStance.isPublic
+    -- Meta upstream definitions do not need to be imported as meta.
+    -- If all is well, we never hit the `none` case.
+    let isMeta := !(upstreamStance.isMeta.getD false)
+    { isExported
+      isAll := !isExported && upstreamStance.isPrivate
+      isMeta, allowMeta := true }
+  | .comptime _ =>
+    -- We could assume all code that ends up recording a compile time usage is intrinsically meta,
+    -- but we don't just in case. If all is well, we never hit the `none` case.
+    let isMeta := !(upstreamStance.isMeta.getD false)
+    { isExported := false -- There is no re-export demand on compile-time code.
+      isAll := upstreamStance.isPrivate
+      isMeta, allowMeta := true }
+
+/-- `CoreM` together with a cache for `Stance`s. -/
+abbrev StanceM := MonadCacheT Name (Option Stance) CoreM
+
+/-- Gets the stance of the given declaration. Records `none` if no stance could be found. This is
+insensitive to the `isExporting` flag on the ambient environment. -/
+def getStance? (decl : Name) : StanceM (Option Stance) := do
+  checkCache decl fun _ => do
+    if let some stance ← findStanceOfNonImported? decl then
+      trace[ImportGraph.Dependency.getStance] "Found local stance for `{.ofConstName decl}`"
+      return stance
+    else if let some stance ← findLowerBoundStanceOfImported? decl then
+      trace[ImportGraph.Dependency.getStance] "Found upstream stance for `{.ofConstName decl}`"
+      return stance
+    else
+      trace[ImportGraph.Dependency.getStance] "Could not find stance for `{.ofConstName decl}`"
+      return none
+
+/-- Calculate the needs of the given declaration based on its `ConstInfo` (type and value). -/
+partial def calcDeclConstInfoNeeds (decl : Name) (env : Environment)
+    (currentDecls : DeclNeeds := {}) (isReExported : Option Bool := none) : DeclNeeds := Id.run do
+  if env.isImportedConst decl || currentDecls.contains decl then return currentDecls
+  let mut declNeeds : DeclNeeds := currentDecls.insert decl {}
+  -- TODO: should we be getting the reason, and do our own custom import? Maybe.
+  -- We could also look up the reason later.
+  let some ci := (env.setExporting false).find? decl | return declNeeds
+  let indirectModUses := indirectModUseExt.getState env
+  declNeeds := visitExpr indirectModUses .type isReExported ci.type declNeeds
+  if let some e := ci.value? (allowOpaque := true) then
+    declNeeds := visitExpr indirectModUses .value isReExported e declNeeds
+  return declNeeds
+where
+  /-- Accumulate the results from expression `e` into `deps`. -/
+  visitExpr
+      (indirectModUses : Std.HashMap Name (Array ModuleIdx)) (loc : ConstLocation)
+      (isReExported : Option Bool) (e : Expr) (declNeeds : DeclNeeds) : DeclNeeds :=
+    e.foldConsts declNeeds fun c declNeeds => Id.run do
+      let mut declNeeds := declNeeds
+      -- Hope that reserved names register appropriate extra mod uses.
+      -- SQ: is that true?
+      if isReservedName env c then return declNeeds
+      if c.isStr && c.getString!.startsWith '_'
+          && ((env.setExporting false).contains c.getPrefix ||
+            (isPrivateName c && (env.setExporting false).contains (privateToUserName c.getPrefix)))
+          && !(env.isImportedConst decl)
+          -- Autogenerated declarations usually lack declaration ranges.
+          && (declRangeExt.find? (level := .exported) env decl <|>
+            declRangeExt.find? (level := .server) env decl).isNone then
+        -- We assume that this is an autogenerated declaration from this module.
+        -- Look at its content, but attach the needs to the parent declaration.
+        -- This is imperfect, but should help catch the common case of abstracted theorems.
+        -- TODO: sometimes aux constants have different visibilities.
+        -- We haven't handled the "other direction" of a private aux constant.
+        let some ci :=
+            (env.setExporting false).find? c.getPrefix
+              <|> (env.setExporting false).find? (privateToUserName c.getPrefix)
+          | return declNeeds
+        -- Note that both of these are uses within the ambient `loc`.
+        -- Even if `c.getPrefix != decl`, we record this as a need of `decl`.
+        -- This can happen when aux decls are created earlier and cached.
+        declNeeds := visitExpr indirectModUses loc isReExported ci.type declNeeds
+        if let some value := ci.value? (allowOpaque := true) then
+          let isValueReExported := if !env.hasExposedBody decl then some false else isReExported
+          declNeeds := visitExpr indirectModUses loc isValueReExported value declNeeds
+        return declNeeds
+      else
+        if let some j := env.getModuleIdxFor? c then
+          let modName := env.header.modules[j]!.module
+          declNeeds := declNeeds.insertFixedDeclFor decl (.expr loc isReExported) modName c
+          if let some indMods := indirectModUses[c]? then
+            let indMods := indMods.map (env.header.modules[·]!.module)
+            declNeeds := declNeeds.insertFixedDeclFor decl
+              -- TODO: don't have the `IndirectModUse`s per se :/
+              (.comptime <| .indirect { kind := "calcDeclConstInfoNeeds", declName := c } indMods)
+              modName c
+          return declNeeds
+        else if (env.setExporting false).contains c && !(c == decl) then
+          declNeeds := declNeeds.insertFreeDeclFor decl (.expr loc isReExported) c
+          calcDeclConstInfoNeeds c env declNeeds isReExported
+        else
+          return declNeeds
+
+def DeclNeeds.calcSyntaxNeeds (decls : Array Name) (cmd : Syntax) (declNeeds : DeclNeeds) :
+    CoreM DeclNeeds := do
+  let indirectModUses := indirectModUseExt.getState (← getEnv)
+  let mut declNeeds := declNeeds
+  for stx in cmd.topDown do
+    if let .node _ k .. := stx then
+      -- do not record builtin parsers, they do not have to be imported
+      if !(← Parser.builtinSyntaxNodeKindSetRef.get).contains k then
+        if let some idx := (← getEnv).getModuleIdxFor? k then
+          let need := .comptime <| .stx k stx.getRange?
+          let modName := (← getEnv).header.modules[idx]!.module
+          for decl in decls do
+            declNeeds := declNeeds.insertFixedDeclFor decl need modName k
+            if let some indirects := indirectModUses[k]? then
+              let env ← getEnv
+              let need := .comptime <| .indirect { kind := "calcSyntaxNeeds", declName := k } <|
+                indirects.map (env.header.modules[·]!.module)
+              declNeeds := declNeeds.insertFixedDeclFor decl need modName k
+        else if (← getEnv).contains k then
+          unless declNeeds.contains k do
+            declNeeds := calcDeclConstInfoNeeds k (← getEnv) declNeeds
+          let need := .comptime <| .stx k stx.getRange?
+          for decl in decls do
+            declNeeds := declNeeds.insertFreeDeclFor decl need k
+  return declNeeds
+
+-- TODO: interleave with expression needs, maybe? Is that ever necessary? I'd hope not.
+open Compiler.LCNF in
+def DeclNeeds.calcIRNeeds (declNeeds : DeclNeeds) : StanceM DeclNeeds := do
+  let mut declNeeds := declNeeds
+  for (decl, _) in declNeeds do
+    let some stance ← getStance? decl | continue
+    if let some isMeta := stance.isMeta then
+      try
+        let lcnf ← (Compiler.LCNF.toDecl decl).run
+        let (_, declNeeds') ← StateT.run (s := declNeeds) <| lcnf.value.forCodeM fun code =>
+          for ref in collectUsedDecls code do
+            if isMeta then
+              -- TODO: handle `isMeta = some true`
+              continue
+            else
+              -- TODO: should we check the refstance here?
+              -- SQ: Is .all lifted up into .comptime under meta import, for e.g. constructors,
+              -- rendering using them unacceptable...?
+              if let some modIdx := (← getEnv).getModuleIdxFor? ref then
+                let modName := (← getEnv).header.modules[modIdx]!.module
+                modify (·.insertFixedDeclFor decl .runtimeIR modName ref)
+              else if (← getEnv).contains ref then -- just in case
+                modify (·.insertFreeDeclFor decl .runtimeIR ref)
+            -- TODO: recurse
+        declNeeds := declNeeds'
+      catch ex =>
+        trace[ImportGraph.Dependency.calcIRNeeds]
+          "`{.ofConstName ``Compiler.LCNF.toDecl} {.ofConstName decl}` failed:\
+            {indentD ex.toMessageData}"
+  return declNeeds
