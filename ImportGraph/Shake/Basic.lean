@@ -352,7 +352,7 @@ def toRawImports (env : Environment) (n : Needs) (skipInit := true) : Array Impo
     let some { module .. } := env.header.modules[i]?
       | panic! s!"Could not find module at index `{i}`"; continue
     if skipInit && (`Init).isPrefixOf module then continue
-    out := out.push { k with module }
+    out := out.push { k with module, importAll := k.isAll }
   return out
 
 end Needs
