@@ -6,8 +6,6 @@ Authors: Thomas R. Murrills
 module
 
 public import Lean.CoreM
-public import Lean.Setup
-public import ImportGraph.Lean.Format
 
 meta import Lean.Parser.Module.Syntax
 import ImportGraph.Lean.Syntax
@@ -16,11 +14,21 @@ import Lean.Meta.Hint
 /-!
 # Pretty-printing imports
 
-This module defines utilities for pretty-printing imports, notably:
-- `ImportGraph.Lean.Import.pretty` and `prettyHeader` for printing `Array Import`s
-- `headerToImportRefs`(`WithWhitespace`) to track source positions and comments around imports
-- `prettyWithSourceWhitespace`(`AndErrorComment`) to print new `Import`s while attaching comments
-  from source header syntax
+This module defines the following utilities for pretty-printing imports:
+- `ImportGraph.Lean.Import.pretty` and `prettyHeader` for printing `Array Import` as source blocks
+  or headers, respectively.
+  - These take an optional `Import.FormatBehavior` parameter to control import sorting and
+    grouping. By default, imports are grouped by visibility (`public`/(private)/`all`), sorted by
+    phase and module name, and visibility groups are separated by extra newlines.
+- `headerToImportRefs`(`WithWhitespace`) to track source positions and comments around existing
+  imports in source
+- `prettyWithSourceWhitespace` to pretty-print new `Import`s while attaching comments from source
+  header syntax. This allows us to reformat existing imports while preserving e.g. `shake`
+  annotations (and any other informative comments).
+  - If comments cannot be carried over (or may no longer apply), this is (by default) explained in
+    a comment shown below the import block.
+- `mkImportSuggestionMessage`, which creates a suggestion reformatting imports. This is used by
+  `#norm_imports`.
 -/
 
 public section
@@ -337,8 +345,14 @@ instance : ToFormat FormatErrors where
       let mut sourceMsg := #[]
       for (ref, ws) in sources do
         sourceMsg := sourceMsg.push (ws.around ref.toImport)
+      -- Like `MessageData.andList`, but for `Format`
+      let andList (xs) := match xs with
+        | [] => f!"– none –"
+        | [x] => x
+        | [x₀, x₁] => f!"{x₀} and {x₁}"
+        | xs@(_ :: _ :: _) => f!"{f!", ".joinSep xs.dropLast}, and {xs.getLast (by grind)}"
       msg := msg.push f!"Comments were present when importing `{module}`, but this module is \
-        now imported differently as {Std.Format.andList (imps.map (f!"`{·}`") |>.toList)}.\n\
+        now imported differently as {andList (imps.map (f!"`{·}`") |>.toList)}.\n\
         Decide if the following original comments still apply:\n\
         ```\n\
         {f!"\n\n".joinSep sourceMsg.toList}\n\
