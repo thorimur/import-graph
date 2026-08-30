@@ -7,21 +7,43 @@ module
 
 public import ImportGraph.Shake.Basic
 
+public section
+
 open Lean ImportGraph Shake
 
 namespace ImportGraph.Shake
 
-public protected class HPostcomp (α) (β) (γ : outParam (Type u)) where
+protected class HPostcomp (α) (β) (γ : outParam (Type u)) where
   protected hpostcomp : α → β → γ
 
 scoped infixl:80 " ≫ " => HPostcomp.hpostcomp
 
-public protected class HTransClosure (α) (β) (γ : outParam (Type u)) where
+protected class HTransClosure (α) (β) (γ : outParam (Type u)) where
   protected htransClosure : α → β → γ
 
 scoped notation:max I "⟦" n "⟧" => HTransClosure.htransClosure I n
 
-abbrev Hierarchy := Array Provides
+class Hierarchy (α) where
+  size : α → Nat
+  getDeps : (a : α) → (i : Nat) → (i < size a) → Provides
+  -- TODO: do we need these?
+  getDeps? : α → Nat → Option Provides
+  getDeps! : α → Nat → Provides
+
+abbrev ArrayHierarchy := Array Provides
+
+@[inline] instance : Hierarchy ArrayHierarchy where
+  size a := a.size
+  getDeps a i _ := a[i]
+  getDeps? a i := a[i]?
+  getDeps! a i := a[i]!
+
+instance {H} [Hierarchy H] : GetElem? H Nat Provides (fun (a : H) i => i < Hierarchy.size a) where
+  getElem := Hierarchy.getDeps
+  getElem? := Hierarchy.getDeps?
+  getElem! := Hierarchy.getDeps!
+
+abbrev HierarchyT (H) [Hierarchy H] := StateT H
 
 /-- Given an abstract `NeedsKind` `[kImp⟩` and a collection of prearrows `j [k⟩ ·` (`Provides`), add to `base` the composed prearrows `j [k⟩[imp⟩ ·` where composition is possible. Does not account for `public` ⊆ `private` on the codomain side (see `linearize`).
 
@@ -63,23 +85,23 @@ scoped instance : Shake.HPostcomp Needs Import Needs where
   hpostcomp n imp := imp.andThen n
 
 /-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be reflexified.  -/
-@[inline] def NeedsKind.transitiveClosureSingle (i : Nat) (k : NeedsKind)
-    (transDeps : Hierarchy) : Needs :=
+@[inline] def NeedsKind.transitiveClosureSingle {H} [Hierarchy H] (i : Nat) (k : NeedsKind)
+    (transDeps : H) : Needs :=
   transDeps[i]! ≫ k
 
-scoped instance : Shake.HTransClosure Hierarchy (Nat × NeedsKind) Needs where
+scoped instance {H} [Hierarchy H] : Shake.HTransClosure H (Nat × NeedsKind) Needs where
   htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps
 
 /-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be reflexified.  -/
-@[inline] def Lean.Import.transitiveClosureSingle (i : Nat) (imp : Import)
-    (transDeps : Hierarchy) : Needs :=
+@[inline] def Lean.Import.transitiveClosureSingle {H} [Hierarchy H] (i : Nat) (imp : Import)
+    (transDeps : H) : Needs :=
   transDeps[i]! ≫ imp
 
-@[inline] scoped instance : Shake.HTransClosure Hierarchy (Nat × Import) Needs where
+@[inline] scoped instance {H} [Hierarchy H] : Shake.HTransClosure H (Nat × Import) Needs where
   htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps
 
 /-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, includes in `base` the compositions of arrows `j [k'⟩ i [k⟩ ·` where composition is possible. Assumes every index is valid. -/
-def Hierarchy.addAndThen (transDeps : Hierarchy) (n : Needs)
+def Hierarchy.addAndThen {H} [Hierarchy H] (transDeps : H) (n : Needs)
     (base := Needs.empty) : Needs := Id.run do
   let mut composed := base
   for (k, i) in n.highToLow do
@@ -87,20 +109,21 @@ def Hierarchy.addAndThen (transDeps : Hierarchy) (n : Needs)
   composed
 
 /-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, forms the compositions of arrows `j [k'⟩ i [k⟩ ·` where composition is possible. -/
-@[inline] def Hierarchy.andThen (transDeps : Hierarchy) (n : Needs) : Needs :=
-  transDeps.addAndThen n (base := .empty)
+@[inline] def Hierarchy.andThen {H} [Hierarchy H] (transDeps : H) (n : Needs) : Needs :=
+  Hierarchy.addAndThen transDeps n (base := .empty)
 
-scoped instance : Shake.HPostcomp Hierarchy Needs Needs where
-  hpostcomp transDeps n := transDeps.andThen n
+scoped instance {H} [Hierarchy H] : Shake.HPostcomp H Needs Needs where
+  hpostcomp transDeps n := Hierarchy.andThen transDeps n
 
-@[inline] def Needs.addTransitiveClosure (base n : Needs) (transDeps : Hierarchy) : Needs :=
-  transDeps.addAndThen n (base := base ∪ n)
+@[inline] def Needs.addTransitiveClosure {H} [Hierarchy H] (base n : Needs) (transDeps : H) :
+    Needs :=
+  Hierarchy.addAndThen transDeps n (base := base ∪ n)
 
 /-- `n ∪ (transDeps ≫ n)` -/
-@[inline] def Needs.transitiveClosure (n : Needs) (transDeps : Hierarchy) : Needs :=
-  transDeps.addAndThen n (base := n)
+@[inline] def Needs.transitiveClosure {H} [Hierarchy H] (n : Needs) (transDeps : H) : Needs :=
+  Hierarchy.addAndThen transDeps n (base := n)
 
-scoped instance : Shake.HTransClosure Hierarchy Needs Needs where
+scoped instance {H} [Hierarchy H] : Shake.HTransClosure H Needs Needs where
   htransClosure transDeps n := n.transitiveClosure transDeps
 
 /--
@@ -118,6 +141,11 @@ Includes the public visibilities in the corresponding private visibilities, to r
 @[inline] def Needs.isAntilinear (a : Needs) : Bool :=
   (a.pub ∩ a.priv == {}) && (a.metaPub ∩ a.metaPriv == {})
 
+@[inline] def Needs.reflOf (i : Nat) : Needs := { Needs.empty with
+  pub := {i}
+  priv := {i}
+  privOfPriv := {i} }
+
 /--
 Adds in the reflexive availibilities of a given module, which are just the public and private availabilities and not the meta lifted versions. This matches what is available within a given module. Equivalent to `a ∪ .reflOf i`.
 
@@ -132,11 +160,11 @@ Note that this operation does *not* necessarily commute with transitive closure.
   a.map (· \ {i})
 
 /-- Checks if the arrows `j [k⟩ i` are covered by `transDeps`'s entry for `i`. Assumes `transDeps` is a `Provides` hierearchy. -/
-@[inline] def Needs.coveredBy (needs : Needs) (i : Nat) (transDeps : Hierarchy) : Bool :=
+@[inline] def Needs.coveredBy {H} [Hierarchy H] (needs : Needs) (i : Nat) (transDeps : H) : Bool :=
   needs.directLe <| transDeps[i]!
 
 /-- Checks if the prearrows `j [k⟩ ·` in `n₁` are included in the arrows provided by the transitive closure of `n₂` with respect to the import hierarchy. Linearizes `n₂` first, which ensures `n₁` is not penalized for respecting `public` ⊆ `private`. Assumes `transDeps` is reflexified. -/
-@[inline] def Needs.subsumedBy (n₁ n₂ : Needs) (transDeps : Hierarchy) : Bool :=
+@[inline] def Needs.subsumedBy {H} [Hierarchy H] (n₁ n₂ : Needs) (transDeps : H) : Bool :=
   n₁.directLe transDeps⟦n₂.linearize⟧
 
 /--
@@ -148,7 +176,7 @@ and `reduced` is minimal (perhaps non-uniquely) among such `Needs`.
 
 Does not assume `a` is linearized.
 -/
-def Needs.reduce (a : Needs) (transDeps : Hierarchy) : Needs := Id.run do
+def Needs.reduce {H} [Hierarchy H] (a : Needs) (transDeps : H) : Needs := Id.run do
   let mut reduced := a.linearize
   let a := a.antilinearize -- avoids unnecessary checks
   -- ensure we handle public/private first, since these may reduce meta
@@ -181,10 +209,10 @@ def Needs.reduce (a : Needs) (transDeps : Hierarchy) : Needs := Id.run do
 /-- Finds the modules `i` that provide `needs` according to `transDeps` (including `i`'s public and
 private scopes), and are lowest according to `lt`. `needs` does not need to be
 transitively closed. -/
-def Needs.coveringsBy (transDeps : Hierarchy) (needs : Needs) (lt : ModuleIdx → ModuleIdx → Bool) :
-    Array ModuleIdx := Id.run do
+def Needs.coveringsBy {H} [Hierarchy H] (transDeps : H) (needs : Needs)
+    (lt : Nat → Nat → Bool) : Array Nat := Id.run do
   let mut mods := #[]
-  for i in 0...transDeps.size do
+  for i in 0...(Hierarchy.size transDeps) do
     if needs.coveredBy i transDeps then
       -- TODO: be cleverer about this? Can we skip entire attempts?
       -- Or maybe totally different data structure? List, perhaps?
@@ -195,12 +223,12 @@ def Needs.coveringsBy (transDeps : Hierarchy) (needs : Needs) (lt : ModuleIdx �
 /-- Finds the modules `i` that provide `needs` according to `transDeps` (including `i`'s public and
 private scopes), and are lowest in the hierarchy according to `prevs`. `needs` does not need to be
 transitively closed. -/
-@[inline] def Needs.coverings (transDeps : Hierarchy) (prevs : Array Bitset) (needs : Needs) :
-    Array ModuleIdx :=
+@[inline] def Needs.coverings {H} [Hierarchy H] (transDeps : H) (prevs : Array Bitset)
+    (needs : Needs) : Array Nat :=
   needs.coveringsBy transDeps fun i j => prevs[i]!.lt prevs[j]!
 
-def sortByDepthThenSize (mods : Array ModuleIdx) (depths : Array Nat) (prevs : Array Bitset) :
-    Array ModuleIdx :=
+def sortByDepthThenSize (mods : Array Nat) (depths : Array Nat) (prevs : Array Bitset) :
+    Array Nat :=
   mods.qsort fun i j =>
     (compare depths[i]! depths[j]! |>.then <| compare prevs[i]!.size prevs[j]!.size).isLT
 
