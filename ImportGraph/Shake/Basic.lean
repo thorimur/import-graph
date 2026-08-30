@@ -344,7 +344,10 @@ theorem directLe_eq_allWithKind_le :
 
 /-! ## Misc. -/
 
-/-- Assuming that the indices in `Needs` correspond to module indices in the provided environment, record an `Import` for each set index in `Needs` in some order. -/
+/-- Assuming that the indices in `Needs` correspond to module indices **in the provided
+environment**, record an `Import` for each set index in `Needs` in some order. Note that this
+should **not** be used in tandem with a `WorkspaceModel`, which uses different indices for modules
+than those used in the environment. -/
 def _root_.ImportGraph.Shake.Lean.Environment.toRawImports (env : Environment)
     (n : Needs) (skipInit := true) : Array Import := Id.run do
   let mut out := #[]
