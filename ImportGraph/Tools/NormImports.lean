@@ -7,9 +7,6 @@ module
 
 public meta import ImportGraph.Imports.FromSource
 public meta import ImportGraph.Imports.Pretty
-public meta import ImportGraph.Lean.Syntax
-public meta import ImportGraph.Shake.Algebra
-public meta import ImportGraph.Shake.Basic
 public meta import ImportGraph.Shake.Environment
 public meta import Lean.Elab.Command
 
@@ -26,6 +23,13 @@ imports by
 future.
 
 Note that this does not take into account dependencies from the current file, which should be handled by `#min_imports`.
+
+## Future work
+
+- Make this work outside of the module system.
+- Allow configuration of the formatting behavior in accordance with `Import.pretty`'s options.
+- Allow sorting by "height" of the source library in the package dependency graph, e.g. `Lean`
+  modules coming first/last, etc.
 -/
 
 open ImportGraph Shake Lean Elab Command
@@ -59,7 +63,7 @@ elab tk:"#norm_imports" : command => do
     | logInfo m!"Imports are normalized."
   if errs.isEmpty then
     -- Note: the widget nature of `diffGranularity := .word` effectively gives us a newline
-    -- before `{newImports}`.
+    -- before `{msg}`, meaning we don't need one here.
     logWarning m!"Imports can be normalized:{msg}"
   else
     logWarning m!"Imports can be normalized, but some comments could not be carried over. \
