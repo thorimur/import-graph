@@ -13,22 +13,36 @@ public meta import ImportGraph.Shake.Basic
 public meta import ImportGraph.Shake.Environment
 public meta import Lean.Elab.Command
 
+/-!
+# `#norm_imports` for interactive normalization of import blocks
+
+This file provides `#norm_imports`, which, when run in some file, suggests normalizing that file's
+imports by
+
+1. removing redundant imports that are implied by other imports
+2. sorting and grouping the imports in a standard order
+
+`#norm_imports` currently *only* works in the module system. This restriction may be removed in the
+future.
+
+Note that this does not take into account dependencies from the current file, which should be handled by `#min_imports`.
+-/
+
 open ImportGraph Shake Lean Elab Command
 
 namespace ImportGraph.NormImports
 
-structure Config where
-  /-- Whether to allow -/
-  self := true
-
-/-- Normalizes the imports of the current file. This ensures that the same modules are available at the same visibilities and phases. It does not take into account the declarations or usages of those modules in the current file; for that, see `#min_imports`.
+-- TODO: mention `#min_imports` when available
+/-- Normalizes the imports of the current file. This removes rendundant imports and formats the
+resulting import block in a standard fashion, ensuring that the same modules are available at the
+same visibilities and phases. It does **not** take into account the declarations or usages of those
+modules in the current file.
 
 `#norm_imports` will also ignore (and remove) any direct imports of `ImportGraph.Tools.NormImports`
 or `ImportGraph.Tools`. -/
 elab tk:"#norm_imports" : command => do
   unless (← getEnv).header.isModule do
-    -- TODO: handle non-modules. Modifying the final `Import` array might be sufficient;
-    -- all shake internals likely still work.
+    -- TODO: handle non-modules. The internals should still work.
     throwError "`#norm_imports` currently only works in the module system."
   let transDeps := (← getEnv).mkTransDeps
   let currentTransNeeds := (← getEnv).currentTransNeeds transDeps
