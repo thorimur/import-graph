@@ -73,9 +73,10 @@ partial def Lean.Environment.mkTransDeps (env : Environment) : ArrayHierarchy :=
     let mod := env.header.moduleData[i]
     let mut transImps := Needs.reflOf i
     for imp in mod.imports do
-      -- Not every import is imported in the current file.
+      -- As per the module system, not every import-of-an-import is also imported.
       let some j := env.getModuleIdx? imp.module | continue
       let some transDepsj := transDeps[j]?
+        -- We expect a topological order. Break if Lean breaks this.
         | panic! "Nontopological order encountered:\n\
             `{imp.module}` is imported by `{env.header.modules[i]!.module}`, \
             but comes afterwards in the environment"
