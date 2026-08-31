@@ -17,7 +17,14 @@ import Std.Data.HashMap.AdditionalOperations
 /-!
 # `WorkspaceModel` and shake
 
-This file defines interactions between a `WorkspaceModel` and shake.
+This file defines interactions between a `WorkspaceModel` and shake. The import hierarchy and workspace model data allows us to turn needs into imports and  Notably, it provides
+
+- `WorkspaceModel.toRawImports`, which converts the indices in a `Needs` into `Import`s (without)
+  doing any reduction)
+- `DeclNeeds.toSimultaneousImportNeeds`, which bakes the needs expressed in `DeclNeeds` into a
+  single `ImportNeeds`
+- `ImportNeeds.providersByLib`, which calculates (per library) which modules provide the given
+  `ImportNeeds`
 -/
 
 public section
@@ -26,8 +33,9 @@ open ImportGraph Shake Lean
 
 namespace ImportGraph
 
-/-- Assuming that the indices in `Needs` correspond to module indices in the provided environment,
-record an `Import` for each set index in `Needs` in some order. -/
+/-- Assuming that the indices in `Needs` correspond to module indices in the provided workspace
+model, record an `Import` for each set index in `Needs` in some order. This does **not** remove
+redundant imports. By default, this skips modules with prefix `Init`. -/
 def WorkspaceModel.toRawImports (w : WorkspaceModel) (n : Needs) (skipInit := true) :
   Array Import := Id.run do
   let mut out := #[]
@@ -75,37 +83,6 @@ def DeclNeeds.toSimultaneousImportNeeds
           let k := stance.toImportNeedsKind k usedStance
           declImportNeeds := declImportNeeds.union k {modIdx}
   return declImportNeeds
-
-open Lean Elab Command in
-/-- Note: does **not** capture extra rev mod uses influencing the file as a whole. -/
-def withElabCommandCapturingNeeds (cmd : Syntax.Command) :
-    CommandElabM (DeclNeeds × Array Name) := do
-  withFreshShakeRecords do
-    let oldEnv ← getEnv
-    elabCommand cmd
-    let env ← getEnv
-    let newDecls := env.constants.foldStage2 (s := #[]) fun acc decl _ =>
-      if oldEnv.contains decl then acc else acc.push decl
-    let mut declNeeds := {}
-    let mut autoDecls := #[] -- Save auto decls, and ensure we found them
-    -- TODO-TAG: auto decl handling
-    for new in newDecls do
-      if isDeclNeedsAutoDecl env new then
-        autoDecls := autoDecls.push new
-      else
-        declNeeds := calcDeclConstInfoNeeds new env declNeeds
-    for autoDecl in autoDecls do
-      -- TODO: this should recurse into autodecls of autodecls. Not entirely happy with handling
-      unless declNeeds.contains autoDecl do
-        declNeeds := calcDeclConstInfoNeeds autoDecl env declNeeds
-    -- TODO-TAG: extra mod uses. Should be at the command level and decls organized by command
-    let extraModUses := getNewExtraModUses env |>.1
-    for new in newDecls do
-      declNeeds := declNeeds.insertExtraModUsesFor new extraModUses
-    -- TODO: restore
-    declNeeds ← declNeeds.calcSyntaxNeeds env newDecls cmd
-    declNeeds ← liftCoreM <| declNeeds.calcIRNeeds.run'
-    return (declNeeds, newDecls)
 
 /-- Computes a mapping `LibIdx → Array ModIdx` assigning to each library in the workspace model an
 array of modules which provide `needs : ImportNeeds` and are minimal (by sets of previous modules).
