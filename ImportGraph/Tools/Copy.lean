@@ -21,9 +21,9 @@ and the text accidentally.
 
 open Lean Server
 
-namespace ImportGraph.Widget
+public meta section
 
-meta section
+namespace ImportGraph.Widget
 
 /--
 Props for the copy widget.
@@ -34,15 +34,16 @@ Props for the copy widget.
 * `hasIcon`: whether to show the copy/check codicon. Only consulted when `display`
   is `some`.
 -/
-public structure CopyProps where
+structure CopyProps where
   display  : Option String := none
   copyText : String
   hasIcon  : Bool := true
   deriving Server.RpcEncodable
 
-/-- The copy-widget JS. Renders a blue link (if `display := some s`) and/or a clickable codicon
-button. Clicking either the text or the icon copies `copyText`. -/
-private def copyJs : String := r#"
+/-- The copy-to-clipboard widget. Renders a blue link (if `display := some s`) and/or a clickable
+codicon button. Clicking either the text or the icon copies `copyText`. -/
+@[widget_module]
+def Copy : Widget.Module where javascript := r#"
 import * as React from 'react'
 const h = React.createElement
 
@@ -74,10 +75,6 @@ export default function ({ display, copyText, hasIcon }) {
 }
 "#
 
-@[widget_module]
-public def Copy : Widget.Module where
-  javascript := copyJs
-
 /--
 How `copyToClipboard` is displayed in the infoview. May be:
 
@@ -87,7 +84,7 @@ How `copyToClipboard` is displayed in the infoview. May be:
 
 Everything displayed is clickable.
 -/
-public inductive CopyDisplay where
+inductive CopyDisplay where
 | /-- Displays some string with or without a preceding codicon.
 
   Note that this only needs to be used if `hasIcon := false`. Otherwise, you may take advantage of
@@ -113,7 +110,7 @@ By default, this is simply a clickable "copy" codicon, but text may be provided 
   codicon)
 
 Use as e.g. `let msg ← copyToClipboard "text to be copied" (display := "(click to copy!)")`. -/
-public def copyToClipboard (copyText : String) (display : CopyDisplay := .iconOnly) :
+def copyToClipboard (copyText : String) (display : CopyDisplay := .iconOnly) :
     CoreM MessageData := do
   let (display, hasIcon) := match display with
     | .iconOnly => (none, true)
@@ -121,11 +118,8 @@ public def copyToClipboard (copyText : String) (display : CopyDisplay := .iconOn
     | .text s hasIcon => (s, hasIcon)
   let props : CopyProps := { display, copyText, hasIcon }
   return .ofWidget
-    (← Widget.WidgetInstance.ofHash Copy.javascriptHash
-        (Server.RpcEncodable.rpcEncode props))
+    (← Widget.WidgetInstance.ofHash Copy.javascriptHash <| Server.RpcEncodable.rpcEncode props)
     m!"[click-to-copy]{if let some display := display then m!" {display}\n" else m!" "}\
       {m!"(Will copy:{indentD copyText})"}"
-
-end
 
 end ImportGraph.Widget

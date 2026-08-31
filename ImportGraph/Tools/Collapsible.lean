@@ -11,22 +11,32 @@ public meta import Lean.Widget.UserWidget
 # Collapsible `MessageData` widget
 
 `collapsible summary body` produces a `MessageData` that
-renders in the infoview as a `<details>` element. `summary` is the
-always-visible header, and `body` is shown only when expanded.
+renders in the infoview as a dropdown `<details>` element:
+```
+▼ summary
+  body
+```
+
+`summary` is the header, and `body` is shown only when expanded.
 Both `summary` and `body` are `MessageData`.
 
-Unlike `MessageData.trace`, this carries no trace styling or `cls` tag.
+Unlike `MessageData.trace`, this carries no trace styling or `cls` tag, and unfortunately is not
+lazy.
+
+## Future work
+
+- Make the body lazy (i.e. only constructed when the dropdown is expanded).
 -/
 
 open Lean Server
 
+public meta section
+
 namespace ImportGraph.Widget
 
-meta section
-
 /-- Props for the `Collapsible` widget. -/
-public structure CollapsibleProps where
-  /-- The always-visible header `MessageData`. -/
+structure CollapsibleProps where
+  /-- The header `MessageData`. -/
   summary       : WithRpcRef MessageData
   /-- The hideable body revealed when the dropdown is expanded. -/
   body          : WithRpcRef MessageData
@@ -40,7 +50,7 @@ Note: The body is mounted lazily. Since an ordinary closed `<details>` component
 the body even if it were closed, we track whether the `<details>` component has ever been opened
 manually and mount it on first open. It then stays mounted. -/
 @[widget_module]
-public def Collapsible : Widget.Module where javascript :=
+def Collapsible : Widget.Module where javascript :=
 r#"
 import * as React from 'react'
 import { InteractiveMessageData } from '@leanprover/infoview'
@@ -97,7 +107,5 @@ public def collapsible {m : Type → Type} [Monad m] [MonadLiftT CoreM m]
   return .ofWidget (← Widget.WidgetInstance.ofHash Collapsible.javascriptHash
     (Server.RpcEncodable.rpcEncode props))
     m!"▼ {summary}{indentD body}"
-
-end
 
 end ImportGraph.Widget
