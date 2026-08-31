@@ -1,10 +1,10 @@
 module
 
+public import ImportGraph.Shake.Algebra
+public import ImportGraph.Shake.DeclNeeds
+
 import ImportGraph.Shake.Algebra
 import ImportGraph.Lean.Environment
-import Lake.CLI.Shake
-public import Lean.Environment
-public import ImportGraph.Shake.Algebra
 
 /-!
 # `Needs` from the `Environment`
@@ -78,3 +78,35 @@ def toRawImports (env : Environment)
     if skipInit && (`Init).isPrefixOf module then continue
     out := out.push { k with module, importAll := k.isAll }
   return out
+
+/-- Like `DeclNeeds.toSimultaneousImportNeeds`, but uses the environment's notion of `ModuleIdx`
+instead of a workspace model's. -/
+def toSimultaneousImportNeeds (env : Environment)
+    (declNeeds : DeclNeeds) (declImportNeeds : ImportNeeds := {}) : StanceM ImportNeeds := do
+  let mut declImportNeeds := declImportNeeds
+  for (decl, declNeeds) in declNeeds do
+    withTraceNode `ImportGraph.Shake
+      (fun _ => return m!"`{.ofConstName decl}`") do←
+    let some stance ← getStance? decl | continue
+    for (modName, usedDecls) in declNeeds.fixedDecls do
+      withTraceNode `ImportGraph.Shake (collapsed := false)
+        (fun _ => return m!"Uses module `{modName}`") do←
+      let some modIdx := env.getModuleIdx? modName | continue
+      for (usedDecl, ks) in usedDecls do
+        withTraceNode `ImportGraph.Shake
+          (fun _ => return m!"Uses decl `{.ofConstName usedDecl}`") do←
+        let some usedStance ← getStance? usedDecl | continue
+        let mut usedKs : DeclDeclNeedsKindSet := {}
+        for k in ks do
+          trace[ImportGraph.Shake] "{k.pretty}"
+          if usedKs.contains k then continue
+          usedKs := usedKs.insert k
+          if let .comptime <| .indirect _ mods := k then
+            for modName in mods do
+              let some modIdx := env.getModuleIdx? modName | continue
+              trace[ImportGraph.Shake] "indirect usage of `{modName}`"
+              declImportNeeds := declImportNeeds.union
+                { isExported := false, isMeta := false, allowMeta := true } {modIdx}
+          let k := stance.toImportNeedsKind k usedStance
+          declImportNeeds := declImportNeeds.union k {modIdx}
+  return declImportNeeds

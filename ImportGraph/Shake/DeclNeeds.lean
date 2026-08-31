@@ -666,7 +666,7 @@ open Compiler.LCNF in
 def DeclNeeds.calcIRNeeds (declNeeds : DeclNeeds) : StanceM DeclNeeds := do
   let mut declNeeds := declNeeds
   for (decl, _) in declNeeds do
-    withTraceNode `ImportGraph.Shake.ImportNeeds
+    withTraceNode `ImportGraph.Shake
       (fun _ => return m!"Calculating IR needs for {.ofConstName decl}") do←
     let some stance ← getStance? decl | continue
     if let some isMeta := stance.isMeta then

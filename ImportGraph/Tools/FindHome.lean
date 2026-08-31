@@ -7,7 +7,6 @@ module
 
 public meta import ImportGraph.Imports.Pretty
 public meta import ImportGraph.Lean.MessageData
-public meta import ImportGraph.Shake.Coverings
 public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Shake.Workspace
 public meta import ImportGraph.Imports.ImportGraph -- for old `#find_home`
@@ -68,7 +67,7 @@ private def DeclNeeds.metaWarning (env : Environment) (declNeeds : DeclNeeds) (c
   let metas := declNeeds.keysArray.filter (isMarkedMeta env) |>.map MessageData.ofConstName
   guard !metas.isEmpty
   return m!"Warning: Some declarations are marked meta. `{cmd}` does not yet handle meta IR; \
-    the following is an approximation. Specifically:{indentD <| .bulletList metas.toList}"
+    the following is an approximation. Specifically:\n{.bulletList metas.toList}"
 
 /--
 Shows the necessary imports for the following command. This includes dependent declarations
@@ -83,12 +82,12 @@ elab tk:"#show_imports" ppSpace &"for" ppLine cmd:command : command => do
   let moreInfo ← liftCoreM do
     if newDecls.isEmpty then pure m!"" else
       let new ← collapsible m!"New declarations produced by this command"
-        m!"{indentD <| .bulletList <| newDecls.toList.map MessageData.ofConstName}"
+        m!"{.bulletList <| newDecls.toList.map MessageData.ofConstName}"
       let prior ← do
         let prior := declNeeds.keysArray.filter (!newDecls.contains ·)
         if prior.isEmpty then pure m!"" else
           collapsible m!"Declarations from the current file needed by this command"
-            m!"{indentD <| .bulletList <| prior.toList.map MessageData.ofConstName}"
+            m!"{.bulletList <| prior.toList.map MessageData.ofConstName}"
       pure m!"{new}{prior}"
   if let some warning := declNeeds.metaWarning (← getEnv) "#show_imports" then
     logWarningAt tk warning
@@ -196,8 +195,8 @@ elab_rules : command
       msgs := msgs.push <|
         m!"This command {if priorDecls.isEmpty then "" else "and its dependencies "}\
           can be moved to the following module\
-          {if aboveSameLib.size = 1 then "" else "s"} above this module:\
-          {indentD <| .bulletList modLinks.toList}"
+          {if aboveSameLib.size = 1 then "" else "s"} above this module:\n\
+          {.bulletList modLinks.toList}"
     unless providedHereSameLib.isEmpty do
       let modLinks ← mkModLinks providedHereSameLib
       msgs := msgs.push <|← liftCoreM <|
@@ -215,13 +214,13 @@ elab_rules : command
   if aboveSameLib.isEmpty && adjSameLib.isEmpty then
     msgs := msgs.push <|
       m!"`#find_home` attempted to move the following new declaration\
-        {if newDecls.size = 1 then "" else "s"}:\
-      {indentD <| .bulletList (newDecls.toList.map .ofConstName)}\
+        {if newDecls.size = 1 then "" else "s"}:\n\
+      {.bulletList (newDecls.toList.map .ofConstName)}\
       {if priorDecls.isEmpty then m!"" else
         m!"\n\
           as well as the following existing declaration{if priorDecls.size = 1 then "" else "s"} \
-          in this file, on which {if newDecls.size = 1 then "it depends" else "they depend"}:\
-          {indentD <| .bulletList (priorDecls.toList.map .ofConstName)}"}"
+          in this file, on which {if newDecls.size = 1 then "it depends" else "they depend"}:\n\
+          {.bulletList (priorDecls.toList.map .ofConstName)}"}"
   let upstreams := minimals.filter fun libIdx _ => libIdx != currentLibIdx &&
   -- TODO: we assume all unequal packages are upstream. This is not necessarily the case.
     (w.pkgIdxOfLibIdx! libIdx != currentPkgIdx)
@@ -241,7 +240,8 @@ elab_rules : command
     -- TODO: more information from declNeeds.
     let minImports ← do
       if reducedImps.isEmpty then pure m!"This command does not require any imports." else
-        collapsible "Imports needed" (Lean.Import.pretty reducedImps)
+        let copyImports ← copyToClipboard s!"{Lean.Import.pretty reducedImps}" "[copy imports]"
+        collapsible m!"Imports needed" m!"{copyImports}\n{Import.pretty reducedImps}"
     let producedConsts ← collapsible m!"New constants from this command"
       m!"{.bulletList (newDecls.toList.map MessageData.ofConstName)}"
     let priorDeclsMsg ← if priorDecls.isEmpty then pure m!"" else
@@ -257,8 +257,9 @@ elab_rules : command
       .text s!"[copy source{if priorDecls.isEmpty then "" else " (without prior declarations)"}]")
   Lean.logInfo m!"{m!"\n".joinSep msgs.toList}\
     \n\n\
-    {if priorDecls.isEmpty then m!"" else m!"Be sure to also move the following prior declarations:\
-      {indentD <| .bulletList (priorDecls.toList.map MessageData.ofConstName)}\
+    {if priorDecls.isEmpty then m!"" else m!"Be sure to also move the following prior \
+      declarations:\n\
+      {.bulletList (priorDecls.toList.map MessageData.ofConstName)}\
       \n\n"}\
     {copySource}\n\n{moreInfo}"
 
