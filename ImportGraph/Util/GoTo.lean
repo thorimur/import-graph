@@ -1,20 +1,27 @@
 /-
 Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Kim Morrison, Paul Lezeau
+Authors: Kim Morrison, Paul Lezeau, Thomas R. Murrills
 -/
 module
 
-public import Lean.Server.Rpc.RequestHandling
 public meta import Lean.Widget.UserWidget
 
--- TODO: see if we should hack messagedata go-to-def on exprs
+/-! # Go-To-Module utilies
+
+This file defines:
+
+- `mkGoToModuleLink`, a clickable widget bringing the user to a given module (at a customizable
+  position and with customizable visible text)
+- `goToModuleOfDecls`/`goToModuleOfDecl`, the same for bringing the user to the position before or
+  after declarations from a (single) module, as specified
+-/
 
 open Lean
 
-meta section
+public meta section
 
-namespace ImportGraph
+namespace ImportGraph.Widget
 
 open Server in
 /-- Tries to resolve the module `modName` to a source file URI.
@@ -24,21 +31,19 @@ since the `Environment` does not keep track of source URIs. -/
 public def getModuleUri (modName : Name) : RequestM (RequestTask Lsp.DocumentUri) :=
   RequestM.asTask do
     let some uri ← documentUriFromModule? modName
-      | throw $ RequestError.invalidParams s!"couldn't find URI for module '{modName}'"
+      | throw <| RequestError.invalidParams s!"Couldn't find URI for module `{modName}`"
     return uri
 
-structure GoToModuleLinkProps where
+/-- Widget props for `ImportGraph.Widget.GoToModule`. -/
+structure GoToModuleProps where
   modName : Name
   pos : Lsp.Position := { line := 0, character := 0 }
   overrideText : Option String := none
 deriving Server.RpcEncodable
 
-public section
-
-/-- When clicked, this widget component jumps to the source of the module `modName`,
-assuming a source URI can be found for the module. -/
+/-- When clicked, this widget component jumps to the source of the module `modName` at the provided `pos`, assuming a source URI can be found for the module. Allows `override -/
 @[widget_module]
-def GoToModuleLink : Widget.Module where javascript := r#"
+def GoToModule : Widget.Module where javascript := r#"
 import * as React from 'react'
 import { EditorContext, useRpcSession } from '@leanprover/infoview'
 
@@ -50,7 +55,7 @@ export default function(props) {
       className: 'link pointer dim',
       onClick: async () => {
         try {
-          const uri = await rs.call('ImportGraph.getModuleUri', props.modName)
+          const uri = await rs.call('ImportGraph.Widget.getModuleUri', props.modName)
           ec.revealPosition({ uri, line: props.pos.line, character: props.pos.character })
         } catch {}
       }
@@ -67,11 +72,11 @@ position in the file.
 By default, the module name is used as the link's text. The text can be overridden by providing
 `overrideText`.
 -/
-def mkGoToModuleLink (modName : Name) (pos : Lsp.Position := ⟨0,0⟩)
+def goToModule (modName : Name) (pos : Lsp.Position := ⟨0,0⟩)
     (overrideText : Option String := none) : CoreM MessageData := do
-  let p : GoToModuleLinkProps := { modName, pos, overrideText }
+  let p : GoToModuleProps := { modName, pos, overrideText }
   return .ofWidget
-    (← Widget.WidgetInstance.ofHash GoToModuleLink.javascriptHash <|
+    (← Widget.WidgetInstance.ofHash GoToModule.javascriptHash <|
       Server.RpcEncodable.rpcEncode p)
     -- Note that `Lsp.Position`s are 0-indexed, hence the `+1`.
     -- (However, Lean uses 0-indexed columns in messages.)
@@ -161,7 +166,7 @@ def goToModuleOfDecls (decls : Array Name) (location := RelativeRangeLocation.en
       let pos := range.toLspRange.start
       if lineBefore then pure { line := pos.line - 1, character := 0 } else pure pos
   let mod := env.header.modules[moduleIdx]!.module
-  mkGoToModuleLink mod pos overrideText
+  goToModule mod pos overrideText
 
 /--
 Goes to either before or after the range of the provided `decl`. The location the cursor
