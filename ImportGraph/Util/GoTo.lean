@@ -11,7 +11,7 @@ public meta import Lean.Widget.UserWidget
 
 This file defines:
 
-- `mkGoToModuleLink`, a clickable widget bringing the user to a given module (at a customizable
+- `goToModule`, a clickable widget bringing the user to a given module (at a customizable
   position and with customizable visible text)
 - `goToModuleOfDecls`/`goToModuleOfDecl`, the same for bringing the user to the position before or
   after declarations from a (single) module, as specified

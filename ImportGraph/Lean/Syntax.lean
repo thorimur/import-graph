@@ -5,12 +5,15 @@ Authors: Thomas R. Murrills
 -/
 module
 
--- We use `all` to access `updateLeadingAux`.
-import all Lean.Syntax
+public import Lean.Syntax
+
+import all Lean.Syntax -- We use `all` to access `updateLeadingAux`.
 
 public section
 
 namespace Lean
+
+deriving instance Ord for Syntax.Range
 
 /-- Like `Lean.Syntax.updateLeading`, but preserves the starting position of the syntax if it
 exists (instead of setting it to `0`). See the docstring of `updateLeading` for more details. -/

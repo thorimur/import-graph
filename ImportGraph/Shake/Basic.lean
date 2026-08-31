@@ -10,10 +10,7 @@ public import ImportGraph.Shake.Core
 /-!
 ## Utilities for Shake types
 
-This file provides basic API for `Needs` and `Bitset`.
-
-Note: Because it provides API for private definitions, this module must be imported via
-`import all`.
+This file provides basic API for `Needs`, `NeedsKind`, and `Bitset`.
 -/
 
 open Lean ImportGraph Shake
@@ -235,8 +232,7 @@ indices of the corresponding `Bitset` from lowest to highest. -/
   return .yield acc
 
 /-- A `Needs` with a `ForIn` instance that traverses the component bitset's indices from the
-highest index to the lowest. This is the most efficient traversal of a bitset. Does not actually
-reverse the indices in the bitsets. -/
+lowest index to the highest. `b.highToLow` is more efficient. -/
 structure LowToHigh where
   toNeeds : Needs
 
@@ -329,7 +325,9 @@ instance : SDiff Needs where
 
 /- Note: we run this a lot, so implement it directly and ensure it stays up-to-date with
 `NeedsKind.all` via proof. -/
-/-- Whether each field of the first `Needs` is contained within the corresponding field of the second. Use with caution: this does not necessarily indicate that one `Needs` subsumes another. See also `Needs.coveredBy` for testing against an import hierarchy. -/
+/-- Whether each field of the first `Needs` is contained within the corresponding field of the
+second. Use with caution: this does not necessarily indicate that one `Needs` subsumes another. See
+also `Needs.coveredBy` for testing against an import hierarchy. -/
 @[inline] def directLe (n m : Needs) : Bool :=
   n.pub.le m.pub &&
   n.priv.le m.priv &&
@@ -342,45 +340,7 @@ theorem directLe_eq_allWithKind_le :
     directLe = fun n m => n.allWithKind fun k nb => nb.le <| m.get k := by
   ext; simp [directLe, allWithKind, applyAt, NeedsKind.all, get, Bool.and_assoc]
 
-/-! ## Misc. -/
-
-/-- Assuming that the indices in `Needs` correspond to module indices **in the provided
-environment**, record an `Import` for each set index in `Needs` in some order. Note that this
-should **not** be used in tandem with a `WorkspaceModel`, which uses different indices for modules
-than those used in the environment. -/
-def _root_.ImportGraph.Shake.Lean.Environment.toRawImports (env : Environment)
-    (n : Needs) (skipInit := true) : Array Import := Id.run do
-  let mut out := #[]
-  for (k, i) in n.highToLow do
-    let some { module .. } := env.header.modules[i]?
-      | panic! s!"Could not find module at index `{i}`"; continue
-    if skipInit && (`Init).isPrefixOf module then continue
-    out := out.push { k with module, importAll := k.isAll }
-  return out
-
 end Needs
-
-namespace Lean.Environment.Visibility
-
-@[inline] def all : Array Environment.Visibility := #[.private, .public]
-
-@[inline] def isExported : Environment.Visibility → Bool
-  | .public  => true
-  | .private => false
-
-instance : ToString Environment.Visibility where
-  toString
-    | .public      => "public"
-    | .private     => "private"
-
-/-- Whether the scope `v₁` includes the scope `v₂`. Note that `private` includes `public`. -/
-@[inline] def includes (v₁ v₂ : Environment.Visibility) : Bool :=
-  match v₁, v₂ with
-  | .private, _ => true
-  | .public, .public => true
-  | .public, .private => false
-
-end Lean.Environment.Visibility
 
 namespace NeedsKind
 
@@ -394,7 +354,8 @@ instance : ToString NeedsKind where
     | .metaPrivOfPriv => "meta all"
 
 /-- The `NeedsKind`s which land (directly) in the private scope. -/
-@[inline, expose, grind] def toPrivate   : Array NeedsKind := #[.priv, .privOfPriv, .metaPriv, .metaPrivOfPriv]
+@[inline, expose, grind] def toPrivate   : Array NeedsKind :=
+  #[.priv, .privOfPriv, .metaPriv, .metaPrivOfPriv]
 /-- The `NeedsKind`s which land (directly) in the public scope. -/
 @[inline, expose, grind] def toPublic    : Array NeedsKind := #[.pub, .metaPub]
 /-- The `NeedsKind`s which (directly) demand the private scope. -/
@@ -413,13 +374,17 @@ instance : ToString NeedsKind where
   | .public  => fromPublic
   | .private => fromPrivate
 
-/-- The `NeedsKind`s which land in the private scope after taking into account `public` ⊆ `private` on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
+/-- The `NeedsKind`s which land in the private scope after taking into account `public` ⊆ `private`
+on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
 @[inline, expose, grind] def toPrivateTrans   : Array NeedsKind := NeedsKind.all
-/-- The `NeedsKind`s which land in the public scope after taking into account `public` ⊆ `private` on both ends. This is simply `toPublic`, but can help record why we're using it. -/
+/-- The `NeedsKind`s which land in the public scope after taking into account `public` ⊆ `private`
+on both ends. This is simply `toPublic`, but can help record why we're using it. -/
 @[inline, expose, grind] def toPublicTrans    : Array NeedsKind := toPublic
-/-- The `NeedsKind`s which demand the private scope after taking into account `public` ⊆ `private` on both ends. -/
+/-- The `NeedsKind`s which demand the private scope after taking into account `public` ⊆ `private`
+on both ends. -/
 @[inline, expose, grind] def fromPrivateTrans : Array NeedsKind := fromPrivate
-/-- The `NeedsKind`s which demand the public scope after taking into account `public` ⊆ `private` on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
+/-- The `NeedsKind`s which demand the public scope after taking into account `public` ⊆ `private`
+on both ends. This is simply `NeedsKind.all`, but can help record why we're using it. -/
 @[inline, expose, grind] def fromPublicTrans  : Array NeedsKind := NeedsKind.all
 
 /-- The scope (directly) demanded by the `NeedsKind`. -/
@@ -429,7 +394,10 @@ instance : ToString NeedsKind where
 @[inline, simp, expose] def target (k : NeedsKind) : Environment.Visibility :=
   if k.isExported then .public else .private
 
-/-- Whether `k` places the `src` in the `tgt` visibility, after taking into account `public` ⊆ `private` on both ends. Note that we abstractly consider `NeedsKind` to be a single arrow between scopes (i.e. `privOfPriv` only relates the private scope to the private scope), but in this function we allow linearization (i.e. composition with `public` ↪ `private`) -/
+/-- Whether `k` places the `src` in the `tgt` visibility, after taking into account `public` ⊆
+`private` on both ends. Note that we abstractly consider `NeedsKind` to be a single arrow between
+scopes (i.e. `privOfPriv` only relates the private scope to the private scope), but in this
+function we allow linearization (i.e. composition with `public` ↪ `private`) -/
 @[inline] def connects (src tgt : Environment.Visibility) (k : NeedsKind) : Bool :=
   match src, tgt with
   | .public,  .private => true
@@ -437,13 +405,15 @@ instance : ToString NeedsKind where
   | .private, .private => k.isAll
   | .private, .public  => false
 
-/-- Whether `k` yields something in the scope `tgt`. This is always true when `tgt` is `.private` thanks to `public` ⊆ `private` on the target side, and is `k.isExported` when `.public`. -/
+/-- Whether `k` yields something in the scope `tgt`. This is always true when `tgt` is `.private`
+thanks to `public` ⊆ `private` on the target side, and is `k.isExported` when `.public`. -/
 def yields (tgt : Environment.Visibility) (k : NeedsKind) : Bool :=
   match tgt with
   | .public  => k.isExported
   | .private => true
 
-/-- Whether `k` demands something in the scope `src`. This is always true when `src` is `.public` thanks to `public` ⊆ `private` on the source side, and is `k.isAll` when `.private`. -/
+/-- Whether `k` demands something in the scope `src`. This is always true when `src` is `.public`
+thanks to `public` ⊆ `private` on the source side, and is `k.isAll` when `.private`. -/
 def demands (src : Environment.Visibility) (k : NeedsKind) : Bool :=
   match src with
   | .public  => true
@@ -471,21 +441,4 @@ def andThen (k₁ k₂ : NeedsKind) (connectable : k₁.target = k₂.source := 
     (k₁.andThen k₂).andThen k₃ = k₁.andThen (k₂.andThen k₃) := by
   grind only [andThen, k₁.not_isExported_and_isAll]
 
-end NeedsKind
-
--- TODO: potentially managing `Needs` differently elsewhere should remove the need for this,
--- hence the reason we include it in `ImportGraph.Shake.Basic` and not another file.
-/-- `includeAll importsWithAll newImports` inserts any `(meta)? import all` statements from
-`importsWithAll` onto the end of `newImports`, taking care to remove any imports from `newImports`
-which already match up to `all` before doing so. -/
-def Import.includeAll (importsWithAll newImports : Array Import) : Array Import := Id.run do
-  let mut newImports := newImports
-  for imp in importsWithAll do
-    if imp.importAll then
-      -- Delete any which match up to `importAll`, then include the `all`
-      newImports := newImports.filter fun newImp =>
-        newImp != imp && newImp != { imp with importAll := newImp.importAll }
-      newImports := newImports.push imp
-  return newImports
-
-end ImportGraph.Shake
+end ImportGraph.Shake.NeedsKind

@@ -6,59 +6,39 @@ import Lake.CLI.Shake
 public import Lean.Environment
 public import ImportGraph.Shake.Algebra
 
+/-!
+# `Needs` from the `Environment`
+
+This file takes an orthogonal approach to constructing `Needs` than `WorkspaceModel`: namely, it
+looks at the imports in the `Environment`. This is (1) insufficient in general (2) tricky, since
+there are divergences between which imports are loaded in the language server vs. with `lake build`.
+
+However, it is still useful for small commands which only need to inspect a local view of imports,
+and do not need to cross module system barriers in the import hierarchy under `lake build` (in
+which case higher modules will not be loaded, e.g. if they are privately imported).
+
+It is therefore the case that this API should **never** be used while using `WorkspaceModel`s. The
+`ModIdx` of a `WorkspaceModel` out of which we build a `Needs` has no connection to the `ModuleIdx`
+in an `Environment` out of which we'd build the same `Needs`.
+-/
+
 open Lean ImportGraph Shake Lean
 
-namespace ImportGraph.Shake
+namespace ImportGraph.Shake.Lean.Environment
 
 public section
 
-/-!
-# TODO
-
-This should never interact with the workspace model approach, and we should disclaim that.
--/
-
-/-- Computes the transitive closure of a set of imports with respect to an import hierarchy `transDeps`. -/
-def Lean.Environment.transitiveClosureOf (env : Environment)
-    (imps : Array Import) (transDeps : ArrayHierarchy) (base : Needs := .empty) : Needs :=
+/-- Computes the transitive closure of a set of imports with respect to an import hierarchy
+`transDeps`, as far as the environment allows. -/
+def transitiveClosureOf (env : Environment)
+    (imps : Array Import) (transDeps : ArrayHierarchy) (base : Provides := .empty) : Provides :=
   imps.foldl (init := base) fun needs imp =>
     needs ∪ transDeps⟦(id (α := Nat) (env.getModuleIdx! imp.module), imp)⟧
 
-@[inline] def Lean.Environment.currentTransNeeds (env : Environment)
-    (transDeps : ArrayHierarchy) (excluding : NameSet := {}) : Needs :=
+/-- The current transitive imports as they are provided to the current environment. -/
+@[inline] def currentTransNeeds (env : Environment)
+    (transDeps : ArrayHierarchy) (excluding : NameSet := {}) : Provides :=
   env.transitiveClosureOf (env.header.imports.filter (!excluding.contains ·.module)) transDeps
-
-/-
-def _root_.Lean.Environment.transImps (env : Environment) (transDeps : Array Needs) : Needs := Id.run do
-  let mut transImps := .empty
-  for imp in env.header.imports do
-    let i := env.getModuleIdx! imp.module
-    transImps := addTransitiveImps transImps imp i transDeps[i]!
-  return transImps
--/
-
--- def Lean.Environment.currentExtraRevUses (env : Environment) : Bitset := Id.run do
---   let mut s := {}
---   for idx in 0...env.header.moduleData.size do
---     if isExtraRevModUse env idx then
---       s := s ∪ {idx}
---   return s
-
--- def setAtNeeds (s : Bitset) (transNeeds : Needs) := transNeeds.map (· ∩ s)
-
--- /-- Not transitively closed. -/
--- def _root_.Lean.Environment.currentExtraRevNeeds (env : Environment) (transNeeds : Needs)
---     (base : Needs := .empty) : Needs := Id.run do
---   let mut needs := base
---   for idx in 0...env.header.moduleData.size do
---     if isExtraRevModUse env idx then
---       for k in NeedsKind.all do
---         if transNeeds.has k idx then
---           needs := needs.union k {idx}
---   return needs
-
-
--- TODO: Okay, I need a way to chain all these things conveniently
 
 /-- Creates an `Array Needs` of transitive dependencies among modules present in the environment.
 Assumes that modules in the environment are topologically sorted.
@@ -67,7 +47,7 @@ Assumes that modules in the environment are topologically sorted.
 `lake build`. As such, this should *only* be used in cases where `Needs` information for the
 modules guaranteed to be present in the environment during build is sufficient, or else behavior
 should be gated on the value of the option `Elab.inServer`. -/
-partial def Lean.Environment.mkTransDeps (env : Environment) : ArrayHierarchy := Id.run do
+partial def mkTransDeps (env : Environment) : ArrayHierarchy := Id.run do
   let mut transDeps := Array.mkEmpty env.header.moduleData.size
   for h : i in 0...env.header.moduleData.size do
     let mod := env.header.moduleData[i]
@@ -85,47 +65,16 @@ partial def Lean.Environment.mkTransDeps (env : Environment) : ArrayHierarchy :=
     transDeps := transDeps.push transImps.linearize
   return transDeps
 
--- partial def Lean.Environment.mkTransDepsAndPrev (env : Environment) :
---     Hierarchy × Array Bitset := Id.run do
---   let mut transDeps := Array.mkEmpty env.header.moduleData.size
---   let mut prevs := Array.mkEmpty env.header.moduleData.size
---   for i in 0...env.header.moduleData.size do
---     let mod := env.header.moduleData[i]!
---     let mut transImps := Needs.reflOf i
---     let mut prev := {}
---     for imp in mod.imports do
---       let j := env.getModuleIdx! imp.module
---       prev := prev ∪ {j} ∪ prevs[j]!
---       transImps := transDeps[j]! ≫
---     transDeps := transDeps.push transImps
---     prevs := prevs.push prev
---   return (transDeps, prevs)
-
--- partial def Lean.Environment.mkPrevious (env : Environment) : Array Bitset := Id.run do
---   let mut prevs := Array.mkEmpty env.header.moduleData.size
---   for i in 0...env.header.moduleData.size do
---     let mod := env.header.moduleData[i]!
---     let mut prev := {}
---     for imp in mod.imports do
---       let j := env.getModuleIdx! imp.module
---       prev := prev ∪ {j} ∪ prevs[j]!
---     prevs := prevs.push prev
---   return prevs
-
-partial def Lean.Environment.mkPreviousWithDepths (env : Environment)
-    (filter : Import → Bool := fun _ => true)
-    (skipInit := true) : Array Bitset × Array Nat := Id.run do
-  let mut prevs := Array.mkEmpty env.header.moduleData.size
-  let mut depths := Array.mkEmpty env.header.moduleData.size
-  for i in 0...env.header.moduleData.size do
-    let mod := env.header.moduleData[i]!
-    let mut prev := {}
-    let mut depth := 0
-    for imp in mod.imports do
-      unless (!skipInit || (`Init).isPrefixOf imp.module) && !(filter imp) do
-        let j := env.getModuleIdx! imp.module
-        prev := prev ∪ {j} ∪ prevs[j]!
-        depth := max depth (depths[j]! + 1)
-    prevs := prevs.push prev
-    depths := depths.push depth
-  return (prevs, depths)
+/-- Assuming that the indices in `Needs` correspond to module indices **in the provided
+environment**, record an `Import` for each set index in `Needs` in some order. Note that this
+should **not** be used in tandem with a `WorkspaceModel`, which uses different indices for modules
+than those used in the environment. -/
+def toRawImports (env : Environment)
+    (n : Needs) (skipInit := true) : Array Import := Id.run do
+  let mut out := #[]
+  for (k, i) in n.highToLow do
+    let some { module .. } := env.header.modules[i]?
+      | panic! s!"Could not find module at index `{i}`"; continue
+    if skipInit && (`Init).isPrefixOf module then continue
+    out := out.push { k with module, importAll := k.isAll }
+  return out

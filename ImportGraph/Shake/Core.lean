@@ -1,3 +1,12 @@
+/-
+Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Thomas R. Murrills
+
+Copyright (c) 2023 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Sebastian Ullrich
+-/
 module
 
 public import Lean.Environment
@@ -6,7 +15,10 @@ public import Lean.Setup
 /-!
 # `shake` core types
 
-This file copies types and functions from `Lake.CLI.Shake` wholesale in order to make them public, with some modifications to `Needs` in order to suit our purposes (namely, we benefit from keeping track of private dependence in order to uniformly handle declarations from the same file, whereas shake can get away with handling `import all` specially.)
+This file copies types and functions from `Lake.CLI.Shake` wholesale in order to make them public,
+with some modifications to `Needs` in order to suit our purposes (namely, we benefit from keeping
+track of private dependence in order to uniformly handle declarations from the same file, whereas
+shake can get away with handling `import all` specially.)
 
 More utilities on these types are defined in `ImportGraph.Shake.Basic`.
 -/
@@ -109,96 +121,7 @@ def ofImport : Lean.Import → NeedsKind
 
 end NeedsKind
 
-/-!
-This section is new.
--/
-
-/--
-While `NeedsKind` records individual demands, this doesn't match up with how modules are provided
-or available within a module *after* all imports are processed. We are often concerned with the
-question of what is provided to a module in order to determine if a declaraton can live there.
-
-This is closely related to `NeedsKind`, but captures the full relationship between two modules, and
-accounts for `public` ⊆ `private`. It is a single "column" of a `Provides` together with laws
-enforcing linearity. Likewise, it may be considered as a (lawful) set of `NeedsKind`s.
-
-It may express a null relationship between two modules. -/
-structure ProvisionKind where
-  pub : Bool := false
-  priv : Bool := false
-  metaPub : Bool := false
-  metaPriv : Bool := false
-  privOfPriv : Bool := false
-  metaPrivOfPriv : Bool := false
-  pub_implies_priv : !pub || priv := by grind
-  metaPub_implies_metaPriv : !metaPub || metaPriv := by grind
-  privOfPriv_implies_priv : !privOfPriv || priv := by grind
-  metaPrivOfPriv_implies_metaPriv : !metaPrivOfPriv || metaPriv := by grind
-deriving Inhabited, Repr, BEq, Hashable
-
-namespace ProvisionKind
-
-attribute [grind! .] pub_implies_priv privOfPriv_implies_priv
-  metaPub_implies_metaPriv metaPrivOfPriv_implies_metaPriv
-
-@[inline] def satisfies (k : NeedsKind) (p : ProvisionKind) : Bool :=
-  match k with
-  | .pub => p.pub
-  | .priv => p.priv
-  | .metaPub => p.metaPub
-  | .metaPriv => p.metaPriv
-  | .privOfPriv => p.privOfPriv
-  | .metaPrivOfPriv => p.metaPrivOfPriv
-
-def add (k : NeedsKind) (p : ProvisionKind) : ProvisionKind :=
-  if p.satisfies k then p else
-    match k with
-    | .pub => { p with
-      pub := true, priv := true
-      -- TODO: why aren't these filled automatically?
-      pub_implies_priv := by grind, privOfPriv_implies_priv := by grind }
-    | .priv => { p with
-      priv := true
-      pub_implies_priv := by grind, privOfPriv_implies_priv := by grind }
-    | .metaPub => { p with
-      metaPub := true, metaPriv := true
-      metaPub_implies_metaPriv := by grind, metaPrivOfPriv_implies_metaPriv := by grind }
-    | .metaPriv => { p with
-      metaPriv := true
-      metaPub_implies_metaPriv := by grind, metaPrivOfPriv_implies_metaPriv := by grind }
-    | .privOfPriv => { p with
-      privOfPriv := true, priv := true
-      pub_implies_priv := by grind, privOfPriv_implies_priv := by grind }
-    | .metaPrivOfPriv => { p with
-      metaPrivOfPriv := true, metaPriv := true
-      metaPub_implies_metaPriv := by grind, metaPrivOfPriv_implies_metaPriv := by grind }
-
-@[inline] protected def union (p₁ p₂ : ProvisionKind) : ProvisionKind where
-  pub := p₁.pub || p₂.pub
-  priv := p₁.priv || p₂.priv
-  metaPub := p₁.metaPub || p₂.metaPub
-  metaPriv := p₁.metaPriv || p₂.metaPriv
-  privOfPriv := p₁.privOfPriv || p₂.privOfPriv
-  metaPrivOfPriv := p₁.metaPrivOfPriv || p₂.metaPrivOfPriv
-
-@[inline] def isEmpty (p : ProvisionKind) : Bool :=
-  !(p.pub || p.priv || p.metaPub || p.metaPriv || p.privOfPriv || p.metaPrivOfPriv)
-
-@[inline] def subset (p₁ p₂ : ProvisionKind) : Bool :=
-  (!p₁.pub || p₂.pub)
-    && (!p₁.priv || p₂.priv)
-    && (!p₁.metaPub || p₂.metaPub)
-    && (!p₁.metaPriv || p₂.metaPriv)
-    && (!p₁.privOfPriv || p₂.privOfPriv)
-    && (!p₁.metaPrivOfPriv || p₂.metaPrivOfPriv)
-
-instance : Union ProvisionKind := ⟨ProvisionKind.union⟩
-
-instance : HasSubset ProvisionKind := ⟨(·.subset ·)⟩
-
-end ProvisionKind
-
-/-- Logically, a map `NeedsKind → Set ModuleIdx`, or `Set Import`. -/
+/-- Logically, a map `NeedsKind → Set <modules>`. -/
 structure Needs where
   pub : Bitset
   priv : Bitset

@@ -1,7 +1,7 @@
 /-
 Copyright (c) 2023 Kim Morrison. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Kim Morrison, Paul Lezeau
+Authors: Kim Morrison, Paul Lezeau, Thomas R. Murrills
 -/
 module
 
@@ -10,6 +10,9 @@ public meta import ImportGraph.Lean.MessageData
 public meta import ImportGraph.Shake.Coverings
 public meta import ImportGraph.Shake.Environment
 public meta import ImportGraph.Shake.Workspace
+public meta import ImportGraph.Imports.ImportGraph -- for old `#find_home`
+public meta import ImportGraph.Graph.TransitiveClosure -- for old `#find_home`
+public meta import ImportGraph.Imports.RequiredModules -- for old `#find_home`
 public import ImportGraph.Tools.Collapsible
 public import ImportGraph.Tools.Copy
 public import ImportGraph.Util.GoTo
@@ -17,7 +20,7 @@ public import ImportGraph.Util.GoTo
 /-!
 # `#find_home`
 
-This module provides the `#find_home` utility in the module system, which suggests places a given command (and its dependencies from the current file) can live.
+This module provides the `#find_home for <cmd>` utility, which suggests places a given command (and its dependencies from the current file) can live in the module system.
 
 ## Future work
 
@@ -34,6 +37,9 @@ This module provides the `#find_home` utility in the module system, which sugges
 
 ### Functionality
 
+- Handle non-modules
+- Provide a simplified meta API for accessing `#find_home`'s composed functionality.
+- Allow finding homes for commands which do not produce declarations
 - Provide better support for moving declarations with same-file dependencies:
   - Capture the syntax needs of dependencies, e.g. via a stateful linter
   - Allow copying all of the dependencies at once
@@ -49,264 +55,90 @@ This module provides the `#find_home` utility in the module system, which sugges
     <module>")
 -/
 
-
-open Lean
-
--- TODO(NOW): warn when we attempt to move meta definitions
--- TODO(NOW): check for runtime IR handling of constructors
--- TODO(NOW): import prettification outside module system
-
 meta section
 
--- open Lake hiding logInfo
--- open Shake
-
-
-
--- meta section
-
--- /--
--- This declaration exists in `Batteries`, but we don't want to make `ImportGraph` depend on batteries. We therefore just bear the duplication cost and make this private (and primed, in case someone `imports all`).
--- -/
--- private protected def Lean.Position.getDeclsAfter' (env : Environment) (pos : Position)
---     (asyncMode := EnvExtension.AsyncMode.local) : Array Name :=
---   declRangeExt.getState env asyncMode |>.foldl (init := #[])
---     fun acc name { selectionRange .. } =>
---       if selectionRange.pos.lt pos then acc else acc.push name
-
--- /--
--- Likewise
--- -/
--- @[inline] private protected def _root_.String.Pos.Raw.getDeclsAfter' (env : Environment) (map : FileMap)
---     (pos : String.Pos.Raw) (asyncMode := EnvExtension.AsyncMode.local) : Array Name :=
---   map.toPosition pos |>.getDeclsAfter' env asyncMode
-
-
-/-
-#min_imports as widget that waits for everything by adding a linter that holds a handle to a promise, which is resolved in the infoview? Is that possible?
-
-Also something that just minimizes your existing imports into something canonical.
-
-Should respect shake directives.
--/
+open ImportGraph Shake Widget Lean Elab Command
 
 namespace ImportGraph.Shake
-/-
-`#find_home` now just needs
-- turn `Needs` into surface imports (easy)
-- meet operation on `Needs`. Might need transitive deps after all.
--/
 
--- To get the current
+/-- A warning to display if any declarations are `meta`, since `meta` declarations are not handled
+properly yet. -/
+private def DeclNeeds.metaWarning (env : Environment) (declNeeds : DeclNeeds) (cmd : String) :
+    Option MessageData := do
+  let metas := declNeeds.keysArray.filter (isMarkedMeta env) |>.map MessageData.ofConstName
+  guard !metas.isEmpty
+  return m!"Warning: Some declarations are marked meta. `{cmd}` does not yet handle meta IR; \
+    the following is an approximation. Specifically:{indentD <| .bulletList metas.toList}"
 
-/-
-Right now:
-
-
-- `#show_imports`
-- fix prevs
-- end-of-file min_imports
--/
-
-
--- elab "#trans_deps" : command => do
---   let { transDeps .. } := initStateFromEnv (← getEnv)
---   let mut isReflexive := #[]
---   let mut composed := #[]
---   for h : i in 0...transDeps.size do
---     if transDeps[i].has .pub i then
---       isReflexive := isReflexive.push i
---     for k in NeedsKind.all do
---       composed := composed.push (i, k, ((Needs.mapComposeSingle transDeps i k).has k i))
---   let env ← getEnv
---   logInfo m!"reflexives: {isReflexive}\ncomposed: {composed}"
-
-
-
--- TODO: `#min_imports!` needs to consider extraRevModUse. So does
-
--- def addCurrentExtraModUses (env : Environment) (needs : Needs) : Needs := Id.run do
---   let mut needs := needs
---   for use in getExtraModUsesState env |>.1 do
---     needs := needs.union { use with } {env.getModuleIdx! use.module}
---   return needs
-
--- TODO:
--- switch argument order
--- include array of new constants?
-
-open ImportGraph Shake
-
-open Lean Elab Command in
-elab "#show_imports" ppLine cmd:command : command => do
+/--
+Shows the necessary imports for the following command. This includes dependent declarations
+from the same file, but does not yet account for syntax used in the commands of those declarations. -/
+elab tk:"#show_imports" ppSpace &"for" ppLine cmd:command : command => do
   let transDeps := (← getEnv).mkTransDeps
   let (declNeeds, newDecls) ← withElabCommandCapturingNeeds cmd
   let importNeeds ← liftCoreM ((← getEnv).toSimultaneousImportNeeds declNeeds).run'
   let reduced := (← getEnv).toRawImports <| importNeeds.toNeeds.reduce transDeps
-
-  Lean.logInfo m!"Found the following new declarations:\n\
-    {newDecls.map MessageData.ofConstName}\n\n\
-    Necessary imports:\n\n\
-    {ImportGraph.Lean.Import.pretty reduced}"
-
-
-
-/-
-- Recursive locating for previous lemmas
-  - "all at once" UX
-  - local meta (`syntax`/`macro` etc.) dependencies! Not accounted for yet.
-  - auxiliary meta dependencies by traversing lemma syntax. `ModuleLinter`.
-- In-file location
-  - Line number in typical case
-  - Top or bottom of file; correct namespaces, scopes, etc.
-  - Visibility especially, and be sure to match it
-  - RELATED: code action for attaching current visibilities
-- Fine-tuning UX
-  - Exclude and downrank dependencies on given globs/files
-  - Allow certain imports to be added (requires masking `Needs` + recording unmasked version and recomputing dependencies in new file)
-- Messages and reporting
-  - Should have a dropdown to show what the (minimized) imports of the new file are
-  - Possibly depth and size here...also "width"? How would that be computed?
-- Testing suite: `lake serve` and in-server only
-- (v2) full hierarchy, beyond current imports
-  - add import of out-of-slice location to current file
-
-## Concrete tasks
-
-- :check: Link for module + line
-- (codicon + effect generic tooling to layer click effects on strings/messagedata?)
-- edits in other files
-- batch edits (hint revamp?)
-
-- Decide on games and how to display
-  - Toggles between games?
-
-- Should `#check` and other term info dives be supported? Maybe instead of environment range nonsense?
-- Need to handle autogenerated declarations without ranges correctly.
-  - Are parent declarations determinable by some extension or other?
-
--/
-
-
-/-
-Different ways to filter + rank possible homes
-- Exports
-- queries
-- Which dependencies matter? upstream vs. same-project
-  - league (affects: do I move it out of the project or not? Which upstream targets are acceptable?)
-- Different games to play for
-  - knockout
-  - ranking
-- mutation!
-- How to handhold? Visibility into problem space, but sensible defaults. How to curate?
-  - Has to teach user what it can do and why; guidance in defaults
-  - Show what axis it's ranked on, why
-    - How to show this?
-  - what other axes it could be ranked on?
-- Explanation why: what imports necessary, what declarations in your project/others it depends on
-- upstream togglability
-
-- Audience: ???
-  - "new" users who have not thought about this problem, but could be trained by the tool
-  - power users
-
-- v0: multiple rankings
-  - Recommended:
-    - Best overall (all dependencies matter), but league := current project
-    - Upstream (all dependencies matter), league := all
-  - upstreamability by upstream project (where in upstream it can go in general)
-  - league := current project, best by project imports
-  - explanations! (why this file, what do your declarations need:
-    - explain which declarations need to be moved
-    - what imports are necessary
-
-- Then:
-  - Get feedback from different users
-    - What automations/actions should exist (file modifications, copying, etc.); what's the workflow
-    - What information do you want to see
-      - How interactive should the display and queries be? Toggle lists? Badges?
-    - What suggestions are best
-
-- v1
-  - queries/exclusions
-  - improve UX with suggestions
-  - (if necessary, mutations!)
-
-  - recursive uses of definitions????
-  - `#scope` synergy: interaction that actually moves the declarations and leaves behind `relocated_to` commands
-
-- v2 mutations
-
-
--/
-
-open ImportGraph
-
-/-
-Maybe the league should be the package? hmmm...
--/
-
--- def displayImport
-
-syntax (name := findHomeStx) "#find_home" ppSpace &"for" ppLine colGe command : command
+  let prettyImports := Import.pretty reduced
+  let copyIcon ← liftCoreM <| copyToClipboard s!"{prettyImports}"
+  let moreInfo ← liftCoreM do
+    if newDecls.isEmpty then pure m!"" else
+      let new ← collapsible m!"New declarations produced by this command"
+        m!"{indentD <| .bulletList <| newDecls.toList.map MessageData.ofConstName}"
+      let prior ← do
+        let prior := declNeeds.keysArray.filter (!newDecls.contains ·)
+        if prior.isEmpty then pure m!"" else
+          collapsible m!"Declarations from the current file needed by this command"
+            m!"{indentD <| .bulletList <| prior.toList.map MessageData.ofConstName}"
+      pure m!"{new}{prior}"
+  if let some warning := declNeeds.metaWarning (← getEnv) "#show_imports" then
+    logWarningAt tk warning
+  logInfoAt tk m!"{copyIcon}Necessary imports:\n\n\
+    {prettyImports}\n\n\
+    {moreInfo}"
 
 /--
-`#find_home <ident>` is deprecated. Instead, use
-```
-#find_home for
-<command>
-```
-where `<command>` declares `<ident>`. This ensures that the imports necessary for the syntax and
-tactics used in the declaration are present too.
+⚠️ `#find_home` is currently experimental. Please report any wish-list features, possible ergonomic
+improvements, or errors on GitHub or Zulip.
+
+---
+
+`#find_home for <cmd>` finds the highest modules in the import hierarchy in which `<cmd>` (and the
+declarations produced during it) can live. This accounts for the syntax, constants, and executable
+code produced during `<cmd>`, and respects the module system.
+
+This includes any declarations which are dependencies of `<cmd>` from the current file, which
+should be moved along with it. (Currently, `#find_home` does not account for the syntax of those
+dependencies, nor does it suggest moving such dependencies individually.)
+
+### Known limitations
+
+- `#find_home` does not yet handle `meta` definitions.
+- `#find_home` does not yet account for the syntax of dependent definitions.
+- `#find_home` may not function correctly outside of the module system.
+- For smaller miscellaneous limitations, see the module docstring.
 -/
-syntax (name := oldFindHomeStx) "#find_home " ident : command
+syntax (name := findHomeStx) "#find_home" ppSpace &"for" ppLine colGe command : command
 
--- elab_rules : command
--- | `(oldFindHomeStx| #find_home%$tk $id:ident) => do
---   pure ()
-  -- Linter.logLintIf Linter.linter.deprecated tk
-  --   m!"The syntax `#find_home <ident>` is deprecated. Instead, use\n\
-  --   ```\n\
-  --   #find_home for\n\
-  --   <command>\n\
-  --   ```\n\
-  --   where `<command>` declares `<ident>`. This ensures that the imports necessary for the syntax \
-  --   and tactics used in the declaration are present too."
-  -- unless id.raw.isMissing do
-  --   discard <| liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
-
--- instance : ToMessageData Preceding where
---   toMessageData _ := "[p]"
-
--- TODO(NOW): check for aboveness wrt the current module via lib trans deps
--- TODO(NOW): exclude non-default targets?
-
--- TODO: we can handle recursive declarations by reversing the hierarchy
--- we need a place to cache all this stuff...
-
--- TODO: do we need to traverse the infotrees? maybe a config option.
-
-instance : ToMessageData WorkspaceModel.Error where
-  toMessageData
-    | .noLibOfModule mod => m!"Could not find library for module `{mod}`."
-    | .readImportsFailure mod path ioError =>
-      m!"Failed to read imports of `{mod}`:{indentD ioError.toString}\n\n\
-        Path to module: {path}"
-
-open ImportGraph.Widget Elab Command in
 elab_rules : command
 | `(findHomeStx| #find_home%$tk for $cmd:command) => do
   let w ← getWorkspaceModel #[← getMainModule]
   if w.hasErrors then
     logErrorAt tk m!"Errors when building the import hierarchy:\n\n\
       {m!"\n\n".joinSep (w.errors.map toMessageData |>.toList)}"
+
+  -- Elaborate command and capture new decls and decl needs
   let (declNeeds, newDecls) ← withElabCommandCapturingNeeds cmd
   if ← MonadLog.hasErrors then -- Also stop if the command produced errors
     return
+  unless (← getEnv).header.isModule do
+    logWarningAt tk "`#find_home` may not function correctly outside of the module system. \
+      This may be addressed in the future."
   if newDecls.isEmpty then
     -- TODO: remove, allow finding homes for commands like `attribute`
     logWarningAt tk m!"This command did not produce any declarations."
     return
+  if let some warning := declNeeds.metaWarning (← getEnv) "#find_home" then
+    logWarningAt tk warning
   -- TODO: better handling of recursive import needs
   let importNeeds ← liftCoreM <| declNeeds.toSimultaneousImportNeeds w |>.run'
   -- logInfo m!"{← liftCoreM <| needs.toWidget env}"
@@ -314,13 +146,15 @@ elab_rules : command
   let priorDecls := declNeeds.keysArray.filter fun decl =>
     !newDecls.contains decl && !(declNeeds.get! decl |>.isAutoDecl)
 
+  -- Locate current module in hierarchy
   let some currentModIdx := w.getModIdx? (← getMainModule)
     | logErrorAt tk m!"Could not find current module `{← getMainModule}` in workspace."
   let currentLibIdx := w.libIdxOfModIdx! currentModIdx
   let currentPkgIdx := w.pkgIdxOfModIdx! currentModIdx
   let currentPrevs := w.getMod! currentModIdx |>.prevs
   let currentTransDeps := w.getMod! currentModIdx |>.transDeps
-  let mut msgs := #[]
+
+  -- Turn an array of module indices into go-to-def links that land after all needs in `declNeeds`
   let mkModLinks (mods : Array ModIdx) : CommandElabM (Array MessageData) := liftCoreM do
     let mut links := #[]
     for modIdx in mods do
@@ -331,6 +165,8 @@ elab_rules : command
         decls := decls.insertMany declsFromMod.keysArray
       links := links.push <|← goToModuleOfDecls decls.toArray (fallbackModule := modName)
     return links
+
+  -- Find minimal modules (the eponymous "homes")
   let minimals := importNeeds.providersByLib w
   -- TODO: currently this is a simple-minded check to see if it exists in the private scope.
   -- (Note that since `public` ⊆ `private`, this includes publicly-imported modules.)
@@ -342,6 +178,9 @@ elab_rules : command
   let providedHereSameLib :=
     minimalsProvidedHere[currentLibIdx]?.getD #[] |>.filter fun modIdx =>
       modIdx != currentModIdx && !(aboveSameLib.contains modIdx)
+
+  -- Construct final `MessageData`
+  let mut msgs := #[]
   -- Note that `providedHereSameLib` is disjoint from both `aboveSameLib` and `adjSameLib`.
   -- Note that `aboveSameLib.isEmpty` implies `providedHereSameLib` is empty.
   if aboveSameLib.isEmpty then
@@ -423,88 +262,71 @@ elab_rules : command
       \n\n"}\
     {copySource}\n\n{moreInfo}"
 
+/-!
+## Non-module `#find_home`
 
--- TODO: Is there something fundamentally wrong about `calcDeclNeeds`? Why do we not need to know the *position* at which the declaration is used? Likewise, isn't there a way-of-needing the meta declarations which would let us say they were used in a meta position?
+This code is a fallback since `#find_home for` does not yet work outside the module system.
+-/
 
+/--
+Warning: this declaration does not respect the module system, and should only be used outside of it.
 
-  -- -- Lake.CLI.Shake
-  -- let minimals := minimals.map fun (project, vals) =>
-  --   (project, vals.map (fun a : ModuleIdx × _ => env.header.modules[a.1]!.module))
-  -- logInfo m!"{minimals}"
-  -- let reduced := needs.reduce transDeps |>.toImports (← getEnv)
-  -- logInfo m!"{decls.map MessageData.ofConstName}: {Import.prettyGrouped reduced}"
+Find locations as high as possible in the import hierarchy
+where the named declaration could live.
+-/
+def Lean.Name.findHome (n : Name) (env : Option Environment) : CoreM NameSet := do
+  let current? := match env with | some env => env.header.mainModule | _ => default
+  let required := (← n.requiredModules).toArray.erase current?
+  let imports := (← getEnv).importGraph.transitiveClosure
+  let mut candidates : NameSet := {}
+  for (n, i) in imports do
+    if required.all fun r => n == r || i.contains r then
+      candidates := candidates.insert n
+  for c in candidates do
+    for i in candidates do
+      if imports.find? i |>.getD {} |>.contains c then
+        candidates := candidates.erase i
+  return candidates
 
--- #find_home
+/--
+`#find_home <ident>` is in the process of being deprecated. Instead, use
+```
+#find_home for
+<command>
+```
+where `<command>` declares `<ident>`. This ensures that the imports necessary for the syntax and
+tactics used in the declaration are present too.
 
+The following describes the functionality outside of the module system, which may not work:
 
+Find locations as high as possible in the import hierarchy
+where the named declaration could live.
+Using `#find_home!` will forcefully remove the current file.
+Note that this works best if used in a file with `import Mathlib`.
 
--- -- One version that does this; another version that minimizes it on your actual file, with some hackery perhaps to ensure it's at the end.
--- -- Ideally a widget with a promise that gets filled in by a linter at the end?
--- -- Or not a promise, because that might not be editable. Just a ref that gets updated, maybe? Plus a ringing of a bell to update the widget...
--- #min_imports
--- -- Also, try-this for replacing imports and such. Should `#min_imports` just be a lightbulb?
+The current file could still be the only suggestion, even using `#find_home! lemma`.
+The reason is that `#find_home!` scans the import graph below the current file,
+selects all the files containing declarations appearing in `lemma`, excluding
+the current file itself and looks for all least upper bounds of such files.
 
+For a simple example, if `lemma` is in a file importing only `A.lean` and `B.lean` and
+uses one lemma from each, then `#find_home! lemma` returns the current file.
+-/
+syntax (name := oldFindHomeStx) "#find_home" "!"? ident : command
 
-
-
--- #show_imports
--- /--
--- Find locations as high as possible in the import hierarchy
--- where the named declaration could live.
--- -/
--- def Lean.Name.findHome (n : Name) (env : Option Environment) : CoreM NameSet := do
---   let current? := match env with | some env => env.header.mainModule | _ => default
---   let required := (← n.requiredModules).toArray.erase current?
---   let imports := (← getEnv).importGraph.transitiveClosure
---   let mut candidates : NameSet := {}
---   for (n, i) in imports do
---     if required.all fun r => n == r || i.contains r then
---       candidates := candidates.insert n
---   for c in candidates do
---     for i in candidates do
---       if imports.find? i |>.getD {} |>.contains c then
---         candidates := candidates.erase i
---   return candidates
-
--- #check Environment.getModuleIdx?
-
-open Elab Command
-
--- run_cmd do
---   let env ← getEnv
---   let ind := indirectModUseExt.getState (← getEnv) |>.toArray.map fun (a, b) => (a, b.map (env.header.moduleNames[·]!))
---   let extra := extraModUses.getState (← getEnv) |>.toList
---   -- logInfo m!"{ind}"
---   let r := isExtraRevModUseExt.getState (← getEnv)
---   logInfo m!"{repr extra}"
-
--- #exit
-
--- open Elab Command in
--- /--
--- Find locations as high as possible in the import hierarchy
--- where the named declaration could live.
--- Using `#find_home!` will forcefully remove the current file.
--- Note that this works best if used in a file with `import Mathlib`.
-
--- The current file could still be the only suggestion, even using `#find_home! lemma`.
--- The reason is that `#find_home!` scans the import graph below the current file,
--- selects all the files containing declarations appearing in `lemma`, excluding
--- the current file itself and looks for all least upper bounds of such files.
-
--- For a simple example, if `lemma` is in a file importing only `A.lean` and `B.lean` and
--- uses one lemma from each, then `#find_home! lemma` returns the current file.
--- -/
--- elab "#find_home" bang:"!"? n:ident : command => do
---   let stx ← getRef
---   let mut homes : Array MessageData := #[]
---   let n ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo n
---   let env? ← bang.mapM fun _ => getEnv
---   for modName in (← Elab.Command.liftCoreM do n.findHome env?) do
---     let p : GoToModuleLinkProps := { modName }
---     homes := homes.push $ .ofWidget
---       (← liftCoreM $ Widget.WidgetInstance.ofHash
---         GoToModuleLink.javascriptHash $
---         Server.RpcEncodable.rpcEncode p)
---       (toString modName)
---   logInfoAt stx[0] m!"{homes}"
+elab_rules : command
+| `(oldFindHomeStx| #find_home%$tk $[!%$bang]? $n:ident) => do
+  if (← getEnv).header.isModule then
+    throwError m!"`#find_home <ident>` does not work in the module system. Instead, use\n\
+      ```\n\
+      #find_home for\n\
+      <command>\n\
+      ```\n\
+      where `<command>` declares `<ident>`. This ensures that the imports necessary for the syntax \
+      and tactics used in the declaration are present too."
+  else liftCoreM do
+    unless n.raw.isMissing do
+      let n ← realizeGlobalConstNoOverloadWithInfo n
+      let env? ← bang.mapM fun _ => getEnv
+      let homes ← (← n.findHome env?).toArray.mapM goToModule
+      logInfoAt tk m!"{homes}"

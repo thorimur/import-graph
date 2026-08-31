@@ -13,7 +13,8 @@ This file defines a few convenient lake utilities, notably:
   - Given `glob : Lake.Glob`, `for (mod, dirEntry) in glob.modulesIn dir do` iterates through all
     modules in `dir` matching `glob`.
 - `ImportGraph.IO.getWorkspace : IO Lake.Workspace`: a version of
-  `Lake.loadWorkspace : LoggerIO Lake.Workspace` for use in `IO` which constructs the IO environment variables and finds the lean installation.
+  `Lake.loadWorkspace : LoggerIO Lake.Workspace` for use in `IO` which constructs the IO
+  environment variables and finds the lean installation.
 -/
 
 open Lean Lake

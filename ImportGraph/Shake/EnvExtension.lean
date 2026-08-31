@@ -17,7 +17,8 @@ This module provides basic API wrappers and boilerplate for shake extensions. Th
 readability, to ensure that the correct aspects of the state are being managed: different
 extensions use different parts of the state for specific purposes.
 
-In particular, it provides `withFreshShakeRecords` for running an action after resetting the shake extension state, allowing for capture of what mod uses that action produced.
+In particular, it provides `withFreshShakeRecords` for running an action after resetting the shake
+extension state, allowing for capture of what mod uses that action produced.
 -/
 
 open Lean
@@ -25,6 +26,10 @@ open Lean
 public section
 
 namespace ImportGraph.Shake
+
+local instance : Ord Name := ⟨Name.quickCmp⟩
+
+deriving instance Repr, Hashable, Ord for IndirectModUse
 
 open ImportGraph Shake
 
@@ -142,7 +147,8 @@ private def List.prependWithoutDuplicating [BEq α] (as bs : List α) : List α 
     let new := List.prependWithoutDuplicating as bs
     if new.contains a then new else a :: new
 
-/-- Iterates through the first set, inserting elements into the second set unless they exist already. -/
+/-- Iterates through the first set, inserting elements into the second set unless they exist
+already. -/
 private def Lean.PHashSet.union {α} [BEq α] [Hashable α] (as bs : PHashSet α) :
     PHashSet α := Id.run do
   let mut bs := bs

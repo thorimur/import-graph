@@ -45,7 +45,9 @@ instance {H} [Hierarchy H] : GetElem? H Nat Provides (fun (a : H) i => i < Hiera
 
 abbrev HierarchyT (H) [Hierarchy H] := StateT H
 
-/-- Given an abstract `NeedsKind` `[kImp⟩` and a collection of prearrows `j [k⟩ ·` (`Provides`), add to `base` the composed prearrows `j [k⟩[imp⟩ ·` where composition is possible. Does not account for `public` ⊆ `private` on the codomain side (see `linearize`).
+/-- Given an abstract `NeedsKind` `[kImp⟩` and a collection of prearrows `j [k⟩ ·` (`Provides`),
+add to `base` the composed prearrows `j [k⟩[imp⟩ ·` where composition is possible. Does not account
+for `public` ⊆ `private` on the codomain side (see `linearize`).
 
 Note that this does *not* add the original collection of prearrows to `base`. -/
 def Needs.addAndThen (impTransDeps : Needs) (kImp : NeedsKind)
@@ -70,21 +72,26 @@ def Needs.addAndThen (impTransDeps : Needs) (kImp : NeedsKind)
 scoped instance : Shake.HPostcomp Needs NeedsKind Needs where
   hpostcomp n k := n.andThen k
 
-/-- Given an abstract `Import` `[kImp⟩` and a collection of prearrows `j [k⟩ ·` (`Provides`), add to `base` the composed prearrows `j [k⟩[imp⟩ ·` where composition is possible.
+/-- Given an abstract `Import` `[kImp⟩` and a collection of prearrows `j [k⟩ ·` (`Provides`), add
+to `base` the composed prearrows `j [k⟩[imp⟩ ·` where composition is possible.
 
 Note that this does *not* add the original collection of prearrows to `base`. -/
 @[inline] def Lean.Import.addAndThen (impTransDeps : Needs) (imp : Import)
     (base : Needs := ∅) : Needs := Id.run do
   impTransDeps.addAndThen (NeedsKind.ofImport imp) base
 
-/-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), forms the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible. -/
+/-- Given an abstract import `[m,p⟩` and a collection of prearrows `j ⟦m',p'⟫ ·` (`Needs`), forms
+the composed prearrows `j ⟦m',p'⟫[m,p⟩ ·` where composition is possible. -/
 @[inline] def Lean.Import.andThen (impTransDeps : Needs) (imp : Import) : Needs :=
   imp.addAndThen (base := .empty) impTransDeps
 
 scoped instance : Shake.HPostcomp Needs Import Needs where
   hpostcomp n imp := imp.andThen n
 
-/-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be reflexified.  -/
+/-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of
+prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This
+is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be
+reflexified. -/
 @[inline] def NeedsKind.transitiveClosureSingle {H} [Hierarchy H] (i : Nat) (k : NeedsKind)
     (transDeps : H) : Needs :=
   transDeps[i]! ≫ k
@@ -92,7 +99,10 @@ scoped instance : Shake.HPostcomp Needs Import Needs where
 scoped instance {H} [Hierarchy H] : Shake.HTransClosure H (Nat × NeedsKind) Needs where
   htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps
 
-/-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be reflexified.  -/
+/-- Given an import hierarchy of arrows `j' [_⟩ j` and a preimport `i [imp⟩ ·`, forms the set of
+prearrows obtained by transitively closing `i [imp⟩ ·` with respect to the import hierarchy. This
+is `i [imp⟩ ·` together with compositions `j [_⟩ i [imp⟩ ·`. `transDeps` is assumed to be
+reflexified.  -/
 @[inline] def Lean.Import.transitiveClosureSingle {H} [Hierarchy H] (i : Nat) (imp : Import)
     (transDeps : H) : Needs :=
   transDeps[i]! ≫ imp
@@ -100,7 +110,8 @@ scoped instance {H} [Hierarchy H] : Shake.HTransClosure H (Nat × NeedsKind) Nee
 @[inline] scoped instance {H} [Hierarchy H] : Shake.HTransClosure H (Nat × Import) Needs where
   htransClosure := fun transDeps (i, imp) => imp.transitiveClosureSingle i transDeps
 
-/-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, includes in `base` the compositions of arrows `j [k'⟩ i [k⟩ ·` where composition is possible. Assumes every index is valid. -/
+/-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, includes in `base` the compositions
+of arrows `j [k'⟩ i [k⟩ ·` where composition is possible. Assumes every index is valid. -/
 def Hierarchy.addAndThen {H} [Hierarchy H] (transDeps : H) (n : Needs)
     (base := Needs.empty) : Needs := Id.run do
   let mut composed := base
@@ -108,7 +119,8 @@ def Hierarchy.addAndThen {H} [Hierarchy H] (transDeps : H) (n : Needs)
     composed := composed ∪ transDeps[i]! ≫ k
   composed
 
-/-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, forms the compositions of arrows `j [k'⟩ i [k⟩ ·` where composition is possible. -/
+/-- Given a set of prearrows `i [k⟩ ·` and an import hierarchy, forms the compositions of arrows
+`j [k'⟩ i [k⟩ ·` where composition is possible. -/
 @[inline] def Hierarchy.andThen {H} [Hierarchy H] (transDeps : H) (n : Needs) : Needs :=
   Hierarchy.addAndThen transDeps n (base := .empty)
 
@@ -127,7 +139,8 @@ scoped instance {H} [Hierarchy H] : Shake.HTransClosure H Needs Needs where
   htransClosure transDeps n := n.transitiveClosure transDeps
 
 /--
-Includes the public visibilities in the corresponding private visibilities, to represent a "provides" relationship.
+Includes the public visibilities in the corresponding private visibilities, to represent a
+"provides" relationship.
 -/
 @[inline] def Needs.linearize (a : Needs) : Needs :=
   { a with priv := a.priv ∪ a.pub, metaPriv := a.metaPriv ∪ a.metaPub }
@@ -147,7 +160,9 @@ Includes the public visibilities in the corresponding private visibilities, to r
   privOfPriv := {i} }
 
 /--
-Adds in the reflexive availibilities of a given module, which are just the public and private availabilities and not the meta lifted versions. This matches what is available within a given module. Equivalent to `a ∪ .reflOf i`.
+Adds in the reflexive availibilities of a given module, which are just the public and private
+availabilities and not the meta lifted versions. This matches what is available within a given
+module. Equivalent to `a ∪ .reflOf i`.
 
 Note that this operation does *not* necessarily commute with transitive closure.
 -/
@@ -159,11 +174,14 @@ Note that this operation does *not* necessarily commute with transitive closure.
 @[inline] def Needs.unreflexify (i : Nat) (a : Needs) : Needs :=
   a.map (· \ {i})
 
-/-- Checks if the arrows `j [k⟩ i` are covered by `transDeps`'s entry for `i`. Assumes `transDeps` is a `Provides` hierearchy. -/
+/-- Checks if the arrows `j [k⟩ i` are covered by `transDeps`'s entry for `i`. Assumes `transDeps`
+is a `Provides` hierearchy. -/
 @[inline] def Needs.coveredBy {H} [Hierarchy H] (needs : Needs) (i : Nat) (transDeps : H) : Bool :=
   needs.directLe <| transDeps[i]!
 
-/-- Checks if the prearrows `j [k⟩ ·` in `n₁` are included in the arrows provided by the transitive closure of `n₂` with respect to the import hierarchy. Linearizes `n₂` first, which ensures `n₁` is not penalized for respecting `public` ⊆ `private`. Assumes `transDeps` is reflexified. -/
+/-- Checks if the prearrows `j [k⟩ ·` in `n₁` are included in the arrows provided by the transitive
+closure of `n₂` with respect to the import hierarchy. Linearizes `n₂` first, which ensures `n₁` is
+not penalized for respecting `public` ⊆ `private`. Assumes `transDeps` is reflexified. -/
 @[inline] def Needs.subsumedBy {H} [Hierarchy H] (n₁ n₂ : Needs) (transDeps : H) : Bool :=
   n₁.directLe transDeps⟦n₂.linearize⟧
 
@@ -186,7 +204,9 @@ def Needs.reduce {H} [Hierarchy H] (a : Needs) (transDeps : H) : Needs := Id.run
         reduced := (reduced \ transDeps⟦(i, k)⟧.linearize).union k {i}
   return reduced.antilinearize
 
-/-- Attempts to insert `a` among the set `as` of minimal elements as a new minimal element according to `lt`. Clears elements of `as` that are above `a`, and ignores `a` if we already have an element lower than `a`.  -/
+/-- Attempts to insert `a` among the set `as` of minimal elements as a new minimal element
+according to `lt`. Clears elements of `as` that are above `a`, and ignores `a` if we already have
+an element lower than `a`.  -/
 @[inline] private def _root_.Array.incorporateBelow (as : Array (Option α)) (a : α)
     (lt : α → α → Bool) : Array (Option α) := Id.run do
   let mut as := as
