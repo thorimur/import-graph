@@ -106,6 +106,6 @@ public def collapsible {m : Type → Type} [Monad m] [MonadLiftT CoreM m]
     initiallyOpen }
   return .ofWidget (← Widget.WidgetInstance.ofHash Collapsible.javascriptHash
     (Server.RpcEncodable.rpcEncode props))
-    m!"▼ {summary}{indentD body}"
+    m!"▼ {summary}{indentD body}\n"
 
 end ImportGraph.Widget
