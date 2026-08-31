@@ -1,29 +1,23 @@
 /-
-Copyright (c) 2026 Thomas Murrills. All rights reserved.
+Copyright (c) 2026 Thomas R. Murrills. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Thomas Murrills
+Authors: Thomas R. Murrills
 -/
 module
 
 import Lake.Load.Workspace
+import ImportGraph.Lake
 import ImportGraph.WorkspaceModel.Summary
 
 /-!
-# `lake exe import-graph-workspace-summary`
+# Root of `lake exe import-graph-workspace-summary`
 
--- TODO(F): rewrite
--- The entry point of the `import-graph-workspace-summary` executable, which loads the Lake workspace
--- rooted at the current directory (or at the directory given as an argument) and prints its
--- `WorkspaceSummary` data as JSON on stdout. Pass `--pretty` for indented output. Progress and
--- errors go to stderr.
+This file provides the `main` function for `import-graph-workspace-summary`, which is used to
+extract information about the lake workspace from the language server by providing a process
+boundary. This avoids a crash that results from loading the lake workspace in the language server.
 
--- This is the acquisition path for consumers that cannot load a Lake workspace in-process —
--- in particular the language server, which does not load Lake's shared library. Because
--- `lean_exe`s link Lake natively, this executable can do what the server cannot; and because
--- `lake exe` resolves executables across all packages of a workspace, any workspace that
--- (transitively) depends on `importGraph` can dump its own structure with
--- `lake exe import-graph-raw`. See `ImportGraph.WorkspaceModel.Build` for the programmatic
--- client.
+Note that this does not interact with the workspace summary cache. Managing the cache is the
+responsibility of the spawner (`getWorkspaceSummary`).
 -/
 
 open Lean ImportGraph Lake
@@ -39,10 +33,6 @@ public def main (args : List String) : IO UInt32 := do
   let (elan?, lean?, lake?) ← findInstall?
   let some lean := lean?
     | IO.eprintln "error: no Lean installation found"; return 1
-  -- This executable is not co-located with the toolchain (unlike `lake` itself), so
-  -- `findInstall?` cannot always detect the Lake installation; but Lake ships with the
-  -- toolchain, so it can be derived from the Lean installation.
-  -- TODO(F): review this more thoroughly, I'm skeptical.
   let lake := lake?.getD (.ofLean lean)
   let lakeEnv ← (Env.compute lake lean elan?).toIO (IO.userError ·)
   let cfg : LoadConfig := { lakeEnv, wsDir }

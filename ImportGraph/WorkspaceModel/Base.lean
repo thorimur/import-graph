@@ -6,28 +6,17 @@ Authors: Thomas R. Murrills
 module
 
 public import Lake.Config.Glob
-public import Lean.Data.Json
 public import Lake.Util.Version
 
+import ImportGraph.Lake
+
 /-!
-# Raw workspace data
+# Basic Lake workspace data
 
--- The structural facts `#find_home` (and friends) need about a workspace are all known to
--- Lake, but *loading* a Lake workspace requires elaborating `lakefile.lean` configurations,
--- which needs Lake's native code in-process — and the language server does not load Lake's
--- shared library.
-
--- This file defines `WorkspaceSummary`: the JSON payload that crosses the process boundary. It
--- is deliberately *raw* — the easily-inspectable, intrinsic facts of the workspace exactly
--- as Lake reports them (package names, Lake indices, paths, targets, dependencies by Lake
--- index, and each package's libraries with their roots and globs), with no derived data: no
--- index choices of our own, no bitsets, no pseudo-entities. All of that is the consumer's
--- business (see `ImportGraph.WorkspaceModel.Build`, which elaborates a payload into the
--- bitset-form `WorkspaceModel`).
-
--- Produce a payload with `WorkspaceSummary.ofWorkspace` wherever workspace loading works — the
--- `import-graph-raw` executable (`ImportGraph.WorkspaceModel.Emit`), or any facet or script
--- with a `Lake.Workspace` in hand.
+This file defines the `BaseWorkspace` shared by both the `WorkspaceSummary`, which is transported
+as Json across a process boundary (extracted from loading the lake workspace), and the
+`WorkspaceModel`, which is computed from the `WorkspaceSummary` (but doesn't need some of its
+fields). See `ImportGraph.WorkspaceModel.WorkspaceSummary` and `ImportGraph.WorkspaceModel.Model`.
 -/
 
 public section
@@ -36,10 +25,7 @@ open Lean System Lake
 
 namespace ImportGraph.Lake
 
-deriving instance ToJson, FromJson for Lake.Glob
-
-/-- One Lean library (`lean_lib`) of a package, as configured: its name and the rule
-(`srcDir`, `roots`, `globs`) by which its modules are found. -/
+/-- Basic data for a `lean_lib`. -/
 structure BaseLibrary where
   /-- The library's name. -/
   name : Name
@@ -52,15 +38,14 @@ structure BaseLibrary where
   globs : Array Lake.Glob := #[name]
 deriving ToJson, FromJson, Repr, BEq, Inhabited
 
-/-- One package of the workspace, as resolved by Lake. All paths are absolute. -/
+/-- Basic data for a lake package. All paths are absolute. -/
 structure BasePackage where
   /-- The package's assigned name (`Package.baseName`). -/
   baseName : Name
   /-- The package's original name (`Package.origName`). -/
   origName : Name
-  /-- Lake's index for the package (`Package.wsIdx`), which is also its position in
-  `WorkspaceSummary.packages`. Together with `name`, this disambiguates packages. -/
-  -- TODO: is it unique, or only unique when paired with `baseName`?
+  /-- Lake's index for the package (`Package.wsIdx`) Together with `baseName`, this disambiguates
+  packages. -/
   wsIdx : Nat
   /-- The package's root directory (absolute). -/
   dir : FilePath
@@ -69,24 +54,29 @@ structure BasePackage where
   leanLibDir : FilePath
 deriving ToJson, FromJson, Repr, BEq, Inhabited
 
-def toolchainBaseName := `toolchain
+/-- The prefix we use for modelling the Lean toolchain, which is simply `toolchain`. -/
+def toolchainPrefix := `toolchain
 
+/-- A `ToolchainVer` as a `Name`. -/
 @[inline] def ToolchainVer.toToolchainName (ver : ToolchainVer) :=
-  Name.str toolchainBaseName ver.toString
+  Name.str toolchainPrefix ver.toString
 
+/-- Whether a name is of the form `toolchain.<ver>`. -/
 @[inline] def isToolchainName (n : Name) :=
-  match n with | .str base _ => base == toolchainBaseName | _ => false
+  match n with | .str base _ => base == toolchainPrefix | _ => false
 
+/-- The `ToolchainVer` extracted from a name of the form `toolchain.<ver>`. -/
 @[inline] def versionOfToolchainName? (n : Name) : Option ToolchainVer :=
   match n with
   | .str base ver => do
-    guard <| base == toolchainBaseName
+    guard <| base == toolchainPrefix
     ToolchainVer.ofString ver
   | _ => none
 
 deriving instance Inhabited for ToolchainVer
 
-/-- The raw structural data of a Lake workspace; see the module docstring. -/
+/-- The basic data of a Lake workspace shared by both the transported `WorkspaceSummary` and the
+rich, computed `WorkspaceModel`. -/
 structure BaseWorkspace where
   /-- The workspace root directory (absolute). -/
   dir : FilePath
