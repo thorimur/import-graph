@@ -29,6 +29,11 @@ This module defines the following utilities for pretty-printing imports:
     a comment shown below the import block.
 - `mkImportSuggestionMessage`, which creates a suggestion reformatting imports. This is used by
   `#norm_imports`.
+
+## Future Work
+
+- Some parts of this API only work in the module system. In general, we should also support
+  non-modules.
 -/
 
 public section
