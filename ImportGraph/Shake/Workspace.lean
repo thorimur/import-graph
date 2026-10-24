@@ -55,6 +55,11 @@ def WorkspaceModel.implicitInitNeeds (w : WorkspaceModel) (base : Needs) : Needs
   let some initIdx := w.getModIdx? `Init | base
   return base.union .pub {initIdx} |>.union .metaPub {initIdx}
 
+/-- The transitive closure of the implicit `Init` imports added to every non-`prelude` file behind
+the scenes. -/
+@[inline] def WorkspaceModel.transInitNeeds (w : WorkspaceModel) : Needs :=
+  w⟦w.implicitInitNeeds ∅⟧.linearize
+
 namespace Shake
 
 /-- Convert extra mod uses into `ImportNeeds`.
