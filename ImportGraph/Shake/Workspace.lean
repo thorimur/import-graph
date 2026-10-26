@@ -58,7 +58,7 @@ def WorkspaceModel.implicitInitNeeds (w : WorkspaceModel) (base : Needs) : Needs
 /-- The transitive closure of the implicit `Init` imports added to every non-`prelude` file behind
 the scenes. -/
 @[inline] def WorkspaceModel.transInitNeeds (w : WorkspaceModel) : Needs :=
-  w⟦w.implicitInitNeeds ∅⟧.linearize
+  w⟦w.implicitInitNeeds ∅ |>.linearize⟧
 
 namespace Shake
 
