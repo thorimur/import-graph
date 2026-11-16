@@ -56,6 +56,40 @@ public def allNamesByModule (p : Name → Bool) : CoreM (Std.HashMap Name (Array
     else
       return names
 
+/--
+Folds `f` over the prefixes of `Name`, starting with the longest. E.g.
+``(`a.b.c).foldrPrefixesM f init`` results in
+```
+let v₁ ← f `a.b.c init
+let v₂ ← f `a.b v₁
+let v₃ ← f `a v₂
+f .anonymous v₃
+```
+This is useful for certain `namespace`-related operations.
+-/
+@[specialize]
+public def foldrPrefixesM {α} {m} [Monad m] (f : Name → α → m α) (init : α) (n : Name) : m α := do
+  let val ← f n init
+  match n with
+  | .anonymous => pure val
+  | .str pre _ | .num pre _ => foldrPrefixesM f val pre
+
+open ImportGraph in
+/--
+Folds `f` over the prefixes of `Name`, starting with the longest. E.g.
+``(`a.b.c).foldrPrefixes f init`` results in
+```
+let v₁ := f `a.b.c init
+let v₂ := f `a.b v₁
+let v₃ := f `a v₂
+f .anonymous v₃
+```
+This is useful for certain `namespace`-related operations.
+-/
+@[inline]
+public def foldrPrefixes {α} (f : Name → α → α) (init : α) (n : Name) : α :=
+  n.foldrPrefixesM (m := Id) f init
+
 end ImportGraph.Lean.Name
 
 section deprecated
