@@ -7,6 +7,9 @@ module
 
 public import Lean.Syntax
 
+import Lean.Parser.Extra
+import Lean.Parser.Command
+
 import all Lean.Syntax -- We use `all` to access `updateLeadingAux`.
 
 public section
@@ -76,5 +79,34 @@ If `canonicalOnly := false` (the default), also returns `none` on non-canonical 
 @[inline] def Syntax.getLeadingPos? (stx : Syntax) (canonicalOnly := false) :
     Option String.Pos.Raw :=
   stx.getHeadInfo.getLeadingPos? canonicalOnly
+
+/--
+Converts a `DataValue` that may appear as the value of some `set_option` to appropriate `Syntax`.
+This only returns `some _` on user-writable `set_option` `DataValue`s (`.ofBool`, `.ofNat`,
+`.ofString`) and `none` on the rest.
+
+Note that the parser responsible for the option values is
+```
+def Parser.Command.optionValue :=
+  nonReservedSymbol "true" <|> nonReservedSymbol "false" <|> strLit <|> numLit
+```
+but this is not a `leading_parser`, and creates no corresponding syntax node. Instead, syntax
+quotations constructing a `set_option` expect a ``TSyntax [`str, `num]``.
+-/
+def DataValue.toSetOptionValueSyntaxFrom? (ref : Syntax) (val : DataValue) (canonical := false)
+    : Option (TSyntax ``Parser.Command.optionValue) :=
+  match val with
+  | .ofNat n      => some ⟨Syntax.mkNumLit (toString n) (info := .fromRef ref canonical)⟩
+  | .ofBool true     => some ⟨mkAtomFrom ref "true" canonical⟩
+  | .ofString str => some ⟨Syntax.mkStrLit str (info := .fromRef ref canonical)⟩
+  | _ => none
+
+@[inherit_doc DataValue.toSetOptionValueSyntaxFrom?]
+def DataValue.toSetOptionValueSyntax? (val : DataValue)
+    : Option (TSyntax ``Parser.Command.optionValue) :=
+  val.toSetOptionValueSyntaxFrom? .missing
+
+instance : Coe (TSyntax [`str, `num]) (TSyntax ``Parser.Command.optionValue) := ⟨(⟨·.raw⟩)⟩
+instance : Coe (TSyntax ``Parser.Command.optionValue) (TSyntax [`str, `num]) := ⟨(⟨·.raw⟩)⟩
 
 end Lean
